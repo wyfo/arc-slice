@@ -1,0 +1,42 @@
+[package]
+name = "arc-slice"
+version = "0.1.0-alpha.1"
+edition = "2021"
+rust-version = "1.65.0"
+
+[features]
+default = ["std", "inlined", "bytes"]
+inlined = ["dep:either"]
+std = []
+
+[dependencies]
+bytes = { version = "1", optional = true }
+either = { version = "1", optional = true }
+serde = { version = "1", optional = true, default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+bytes = "1.10.0"
+criterion = "0.5.1"
+iai-callgrind = "0.14.0"
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = { version = "0.7", features = ["checkpoint"] }
+
+[[bench]]
+name = "comparison"
+harness = false
+
+[[bench]]
+name = "iai_comparison"
+harness = false
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+#missing_docs = "deny"
+missing_debug_implementations = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[lints.clippy]
+dbg_macro = "forbid"
+semicolon_if_nothing_returned = "forbid"
+#undocumented_unsafe_blocks = "forbid"

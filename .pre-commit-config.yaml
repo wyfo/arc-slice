@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.29.9
+    hooks:
+      - id: typos
+        args: [--force-exclude, --exclude, "bytes/"]
+  - repo: local
+    hooks:
+      - id: fmt
+        name: fmt
+        entry: cargo fmt -- --config "unstable_features=true,imports_granularity=Crate,group_imports=StdExternalCrate,format_code_in_doc_comments=true"
+        language: rust
+        pass_filenames: false
+        types_or: [rust, toml]
+      - id: clippy-no-default-features
+        name: clippy-no-default-features
+        entry: cargo clippy --no-default-features -- -D warnings
+        language: rust
+        pass_filenames: false
+        types_or: [rust, toml]
+      - id: clippy-all-features
+        name: clippy-all-features
+        entry: cargo clippy --all-features --tests -- -D warnings
+        language: rust
+        pass_filenames: false
+        types_or: [rust, toml]
+      - id: test
+        name: test
+        entry: cargo test --all-features
+        language: rust
+        pass_filenames: false
+        types_or: [rust, toml]
