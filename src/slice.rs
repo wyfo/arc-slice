@@ -6,10 +6,10 @@ use core::{
     hash::{Hash, Hasher},
     mem,
     mem::{ManuallyDrop, MaybeUninit},
+    num::NonZeroUsize,
     ops::{Deref, RangeBounds},
     ptr,
     ptr::NonNull,
-    slice,
 };
 
 use crate::{
@@ -71,7 +71,7 @@ const VEC_CAPA_SHIFT: usize = 1;
 
 enum Inner {
     Static,
-    Vec { capacity: usize },
+    Vec { capacity: NonZeroUsize },
     Arc(ManuallyDrop<Arc>),
 }
 
@@ -121,6 +121,9 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     fn new_vec(mut vec: Vec<T>) -> Self {
+        if vec.capacity() == 0 {
+            return Self::new_static(&[]);
+        }
         let Some(base) = L::get_base(&mut vec) else {
             let (arc, start, length, _) = Arc::new_mut(vec, (), 1);
             return unsafe { Self::from_arc(arc, start, length) };
@@ -159,7 +162,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
-    unsafe fn rebuild_vec(&self, capacity: usize) -> Vec<T> {
+    unsafe fn rebuild_vec(&self, capacity: NonZeroUsize) -> Vec<T> {
         let (ptr, len) = match L::base_into_ptr(unsafe { self.base.assume_init() }) {
             Some(base) => {
                 let len = unsafe { sub_ptr(self.start.as_ptr(), base.as_ptr()) } + self.length;
@@ -169,12 +172,12 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
                 let ptr = unsafe {
                     self.start
                         .as_ptr()
-                        .offset(self.length as isize - capacity as isize)
+                        .offset(self.length as isize - capacity.get() as isize)
                 };
-                (ptr, capacity)
+                (ptr, capacity.get())
             }
         };
-        unsafe { Vec::from_raw_parts(ptr, len, capacity) }
+        unsafe { Vec::from_raw_parts(ptr, len, capacity.get()) }
     }
 
     unsafe fn shrink_vec(&self, vec: Vec<T>) -> Vec<T> {
@@ -185,7 +188,9 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     fn inner(&self, arc_or_capa: *mut ()) -> Inner {
         match NonNull::new(arc_or_capa) {
             Some(_) if ptr_addr(arc_or_capa) & VEC_FLAG != 0 => Inner::Vec {
-                capacity: ptr_addr(arc_or_capa) >> VEC_CAPA_SHIFT,
+                capacity: unsafe {
+                    NonZeroUsize::new(ptr_addr(arc_or_capa) >> VEC_CAPA_SHIFT).unwrap_unchecked()
+                },
             },
             Some(arc) => Inner::Arc(ManuallyDrop::new(unsafe { Arc::from_ptr(arc) })),
             None => Inner::Static,
@@ -209,7 +214,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
 
     #[inline]
     pub const fn as_slice(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.start.as_ptr(), self.len()) }
+        unsafe { core::slice::from_raw_parts(self.start.as_ptr(), self.len()) }
     }
 
     pub fn get_ref(&self, range: impl RangeBounds<usize>) -> ArcSliceRef<T, L> {
@@ -230,7 +235,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
                 fn truncate_alloc<T: Send + Sync + 'static, L: Layout>(
                     this: &mut ArcSlice<T, L>,
                     len: usize,
-                    capacity: usize,
+                    capacity: NonZeroUsize,
                 ) {
                     let vec = unsafe { this.rebuild_vec(capacity) };
                     let (arc, _, _) = Arc::new(vec, (), 1);
@@ -420,7 +425,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[cold]
-    fn clone_vec(&self, arc_or_capa: *mut (), capacity: usize) -> Self {
+    fn clone_vec(&self, arc_or_capa: *mut (), capacity: NonZeroUsize) -> Self {
         let vec = unsafe { self.rebuild_vec(capacity) };
         let (arc, _, _, _) = Arc::new_mut(vec, (), 2);
         let arc_ptr = arc.into_ptr();
