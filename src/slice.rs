@@ -421,7 +421,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     #[cold]
     fn clone_vec(&self, arc_or_capa: *mut (), capacity: usize) -> Self {
         let vec = unsafe { self.rebuild_vec(capacity) };
-        let (arc, _, _, _) = Arc::new_mut(vec, (), 2);
+        let (arc, _, _) = Arc::new(vec, (), 2);
         let arc_ptr = arc.into_ptr();
         // Release ordering must be used to ensure the arc vtable is visible
         // by `get_metadata`. In case of failure, the read arc is cloned with
