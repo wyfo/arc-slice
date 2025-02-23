@@ -23,11 +23,11 @@ iai-callgrind = "0.14.0"
 loom = { version = "0.7", features = ["checkpoint"] }
 
 [[bench]]
-name = "comparison"
+name = "criterion"
 harness = false
 
 [[bench]]
-name = "iai_comparison"
+name = "iai"
 harness = false
 
 [lints.rust]
