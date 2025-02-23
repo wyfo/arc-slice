@@ -18,7 +18,11 @@ mod slice_mut;
 mod str;
 mod utils;
 
-pub use crate::{slice::ArcSlice, slice_mut::ArcSliceMut, str::ArcStr};
+pub use crate::{
+    slice::{ArcSlice, ArcSliceRef},
+    slice_mut::ArcSliceMut,
+    str::ArcStr,
+};
 
 pub type ArcBytes<L = layout::Compact> = ArcSlice<u8, L>;
 pub type ArcBytesMut = ArcSliceMut<u8>;
