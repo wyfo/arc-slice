@@ -9,7 +9,6 @@ use core::{
     ops::{Deref, RangeBounds},
     ptr,
     ptr::NonNull,
-    slice,
 };
 
 use crate::{
@@ -209,7 +208,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
 
     #[inline]
     pub const fn as_slice(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.start.as_ptr(), self.len()) }
+        unsafe { core::slice::from_raw_parts(self.start.as_ptr(), self.len()) }
     }
 
     pub fn get_ref(&self, range: impl RangeBounds<usize>) -> ArcSliceRef<T, L> {

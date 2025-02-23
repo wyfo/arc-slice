@@ -27,6 +27,24 @@ pub(crate) fn unit_metadata<M: Any>() -> &'static M {
     unsafe { NonNull::dangling().as_ref() }
 }
 
+#[allow(dead_code)]
+pub(crate) struct BytesBuffer(Box<[MaybeUninit<u8>]>);
+
+impl BytesBuffer {
+    pub(crate) fn from_vec(mut vec: Vec<u8>) -> Self {
+        let mut vec = ManuallyDrop::new(vec);
+        let capacity = vec.capacity();
+        let ptr = vec.as_mut_ptr().cast();
+        Self(unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(ptr, capacity)) })
+    }
+}
+
+impl Buffer<u8> for BytesBuffer {
+    fn as_slice(&self) -> &[u8] {
+        &[]
+    }
+}
+
 // The structure needs to be repr(C) to allow pointer casting between `Arc` and
 // `ArcInner<R, B, M>`. `align(4)` is added to ensure the possibility of pointer tagging.
 #[repr(C, align(4))]
@@ -234,10 +252,22 @@ pub(crate) struct Arc(ErasedArc);
 
 impl Arc {
     pub(crate) fn new<T: Send + Sync + 'static, B: Buffer<T>, M: Send + Sync + 'static>(
-        buffer: B,
+        mut buffer: B,
         metadata: M,
         rc: usize,
     ) -> (Self, NonNull<T>, usize) {
+        if is!(T, u8) {
+            match buffer.try_into_vec() {
+                Ok(mut vec) => {
+                    let start = NonNull::new(vec.as_mut_ptr()).unwrap();
+                    let len = vec.len();
+                    let vec = unsafe { mem::transmute::<Vec<T>, Vec<u8>>(vec) };
+                    let (arc, _, _) = Arc::new(BytesBuffer::from_vec(vec), metadata, rc);
+                    return (arc, start, len);
+                }
+                Err(b) => buffer = b,
+            }
+        }
         let mut inner = ArcGuard::new(ArcInner {
             rc: rc.into(),
             vtable: VTable::new::<T, B, M>(),
@@ -269,10 +299,15 @@ impl Arc {
         (inner.into_arc(), start, len, capacity)
     }
 
-    pub(crate) unsafe fn forget_vec<T>(self) {
+    pub(crate) unsafe fn forget_vec<T: 'static>(self) {
         let this = ManuallyDrop::new(self);
-        let inner = this.0.cast::<ArcInner<AtomicUsize, Vec<T>, ()>>();
-        mem::forget(*unsafe { Box::from_raw(inner.as_ptr()) });
+        if is!(T, u8) {
+            let inner = this.0.cast::<ArcInner<(), BytesBuffer, ()>>();
+            mem::forget(*unsafe { Box::from_raw(inner.as_ptr()) });
+        } else {
+            let inner = this.0.cast::<ArcInner<AtomicUsize, Vec<T>, ()>>();
+            mem::forget(*unsafe { Box::from_raw(inner.as_ptr()) });
+        }
     }
 
     pub(crate) unsafe fn from_ptr(ptr: NonNull<()>) -> Self {
