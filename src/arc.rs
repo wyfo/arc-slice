@@ -55,9 +55,9 @@ struct VTable {
 impl VTable {
     unsafe fn update_capacity<T: Send + Sync + 'static, B: BufferMut<T>>(arc: ErasedArc) {
         let inner = unsafe { arc.cast::<ArcInner<AtomicUsize, B, ()>>().as_mut() };
-        let capacity = inner.buffer.capacity();
-        let len = capacity - atomic_usize_with_mut(&mut inner.spare_capacity, |c| *c);
-        if len != inner.buffer.len() {
+        let spare_capacity = atomic_usize_with_mut(&mut inner.spare_capacity, |c| *c);
+        if spare_capacity != usize::MAX {
+            let len = inner.buffer.capacity() - spare_capacity;
             unsafe { inner.buffer.set_len(len) };
         }
     }
@@ -259,13 +259,12 @@ impl Arc {
         let mut inner = ArcGuard::new(ArcInner {
             rc: rc.into(),
             vtable: VTable::new_mut::<T, B, M>(),
-            spare_capacity: AtomicUsize::new(0),
+            spare_capacity: AtomicUsize::new(usize::MAX),
             buffer,
             metadata,
         });
         let len = inner.get().buffer.len();
         let capacity = inner.get().buffer.capacity();
-        atomic_usize_with_mut(&mut inner.get().spare_capacity, |c| *c = capacity - len);
         let start = inner.get().buffer.as_mut_ptr();
         (inner.into_arc(), start, len, capacity)
     }
