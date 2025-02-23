@@ -192,7 +192,7 @@ impl VTable {
         if is_not!(M, ()) {
             &Self {
                 dealloc: Self::dealloc_mut::<T, B, M>,
-                get_metadata: Some(Self::get_metadata::<(), B, M>),
+                get_metadata: Some(Self::get_metadata::<AtomicUsize, B, M>),
                 take_buffer: Self::take_buffer_mut::<T, B, M>,
                 into_mut: Some(Self::into_mut::<T, B>),
                 try_reserve: Some(Self::try_reserve::<T, B>),

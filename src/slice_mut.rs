@@ -30,8 +30,6 @@ pub struct ArcSliceMut<T: Send + Sync + 'static> {
 }
 
 const VEC_FLAG: usize = 0b01;
-const TAIL_FLAG: usize = 0b10;
-const ARC_MASK: usize = !0b11;
 const VEC_CAPA_SHIFT: usize = 1;
 
 enum Inner {
@@ -45,6 +43,8 @@ enum Inner {
 }
 
 impl<T: Send + Sync + 'static> ArcSliceMut<T> {
+    const TAIL_FLAG: usize = if mem::needs_drop::<T>() { 0b10 } else { 0 };
+
     pub fn new<B: BufferMut<T>>(buffer: B) -> Self {
         Self::new_with_metadata(buffer, ())
     }
@@ -72,7 +72,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     fn set_tail_flag(&mut self) {
         if self.length < self.capacity {
             self.arc_or_offset = non_null_map_addr(self.arc_or_offset, |addr| {
-                (addr.get() | TAIL_FLAG).try_into().unwrap()
+                (addr.get() | Self::TAIL_FLAG).try_into().unwrap()
             });
         }
     }
@@ -143,11 +143,13 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
             }
         } else {
             let masked_ptr = non_null_map_addr(self.arc_or_offset, |addr| unsafe {
-                (addr.get() & ARC_MASK).try_into().unwrap_unchecked()
+                (addr.get() & !Self::TAIL_FLAG)
+                    .try_into()
+                    .unwrap_unchecked()
             });
             Inner::Arc {
                 arc: ManuallyDrop::new(unsafe { Arc::from_ptr(masked_ptr) }),
-                is_tail: arc_or_offset & TAIL_FLAG != 0,
+                is_tail: arc_or_offset & Self::TAIL_FLAG != 0,
             }
         }
     }
@@ -198,7 +200,9 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
 
     fn remove_tail_flag(&mut self) {
         self.arc_or_offset = non_null_map_addr(self.arc_or_offset, |addr| unsafe {
-            (addr.get() & !TAIL_FLAG).try_into().unwrap_unchecked()
+            (addr.get() & !Self::TAIL_FLAG)
+                .try_into()
+                .unwrap_unchecked()
         });
     }
 
@@ -292,12 +296,13 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
 
     pub fn try_unsplit(&mut self, other: ArcSliceMut<T>) -> Result<(), ArcSliceMut<T>> {
         let end = unsafe { non_null_add(self.start, self.length) };
+        let mut other_arc_or_offset = non_null_addr(other.arc_or_offset).get();
+        if mem::needs_drop::<T>() {
+            other_arc_or_offset &= !Self::TAIL_FLAG;
+        };
         if end == other.start
             && matches!(self.inner(), Inner::Arc { .. })
-            && ((non_null_addr(self.arc_or_offset).get()
-                ^ non_null_addr(other.arc_or_offset).get())
-                | TAIL_FLAG)
-                == TAIL_FLAG
+            && non_null_addr(self.arc_or_offset).get() == other_arc_or_offset
         {
             debug_assert_eq!(self.length, self.capacity);
             // assign arc to have tail flag
