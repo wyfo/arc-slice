@@ -18,7 +18,7 @@ fn arcslice_clone() {
 
 #[library_benchmark]
 fn bytes_declare() {
-    black_box(<ArcBytes>::new(vec![0u8; 8]));
+    black_box(Bytes::from(vec![0u8; 8]));
 }
 
 #[library_benchmark]
