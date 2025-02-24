@@ -53,12 +53,17 @@ struct VTable {
 }
 
 impl VTable {
-    unsafe fn update_capacity<T: Send + Sync + 'static, B: BufferMut<T>>(arc: ErasedArc) {
-        let inner = unsafe { arc.cast::<ArcInner<AtomicUsize, B, ()>>().as_mut() };
-        let spare_capacity = atomic_usize_with_mut(&mut inner.spare_capacity, |c| *c);
-        if spare_capacity != usize::MAX {
-            let len = inner.buffer.capacity() - spare_capacity;
-            unsafe { inner.buffer.set_len(len) };
+    unsafe fn update_capacity<T: Send + Sync + 'static, C: 'static, B: BufferMut<T>>(
+        arc: ErasedArc,
+    ) {
+        if mem::needs_drop::<T>() {
+            assert!(is!(C, AtomicUsize));
+            let inner = unsafe { arc.cast::<ArcInner<AtomicUsize, B, ()>>().as_mut() };
+            let spare_capacity = atomic_usize_with_mut(&mut inner.spare_capacity, |c| *c);
+            if spare_capacity != usize::MAX {
+                let len = inner.buffer.capacity() - spare_capacity;
+                unsafe { inner.buffer.set_len(len) };
+            }
         }
     }
 
@@ -66,9 +71,11 @@ impl VTable {
         drop(unsafe { Box::from_raw(arc.cast::<ArcInner<C, B, M>>().as_ptr()) });
     }
 
-    unsafe fn dealloc_mut<T: Send + Sync + 'static, B: BufferMut<T>, M>(arc: ErasedArc) {
-        unsafe { Self::update_capacity::<T, B>(arc) }
-        unsafe { Self::dealloc::<AtomicUsize, B, M>(arc) }
+    unsafe fn dealloc_mut<T: Send + Sync + 'static, C: 'static, B: BufferMut<T>, M>(
+        arc: ErasedArc,
+    ) {
+        unsafe { Self::update_capacity::<T, C, B>(arc) }
+        unsafe { Self::dealloc::<C, B, M>(arc) }
     }
 
     unsafe fn get_metadata<C, B, M: Any>(arc: ErasedArc, type_id: TypeId) -> Option<NonNull<()>> {
@@ -114,38 +121,35 @@ impl VTable {
         unsafe { Self::take_buffer::<T, (), B, M>(arc, type_id, len, buffer_ptr, buffer_len) }
     }
 
-    unsafe fn take_buffer_mut<T: Send + Sync + 'static, B: BufferMut<T>, M>(
+    unsafe fn take_buffer_mut<T: Send + Sync + 'static, C: 'static, B: BufferMut<T>, M>(
         arc: ErasedArc,
         type_id: TypeId,
         len: usize,
         buffer_ptr: NonNull<()>,
     ) -> bool {
         let buffer_len = |buffer: &B| buffer.len();
-        unsafe { Self::update_capacity::<T, B>(arc) };
-        unsafe {
-            Self::take_buffer::<T, AtomicUsize, B, M>(arc, type_id, len, buffer_ptr, buffer_len)
-        }
+        unsafe { Self::update_capacity::<T, C, B>(arc) };
+        unsafe { Self::take_buffer::<T, C, B, M>(arc, type_id, len, buffer_ptr, buffer_len) }
     }
 
-    unsafe fn into_mut<T: Send + Sync + 'static, B: BufferMut<T>>(
+    unsafe fn into_mut<T: Send + Sync + 'static, C, B: BufferMut<T>>(
         arc: ErasedArc,
         slice_mut_ptr: NonNull<()>,
     ) {
-        unsafe { Self::update_capacity::<T, B>(arc) };
-        let inner = unsafe { arc.cast::<ArcInner<AtomicUsize, B, ()>>().as_mut() };
+        let inner = unsafe { arc.cast::<ArcInner<C, B, ()>>().as_mut() };
         let slice_mut = ArcSliceMut::from_arc(&mut inner.buffer, Arc(arc));
         unsafe { non_null_write(slice_mut_ptr.cast(), slice_mut) };
     }
 
-    unsafe fn try_reserve<T: Send + Sync + 'static, B: BufferMut<T>>(
+    unsafe fn try_reserve<T: Send + Sync + 'static, C: 'static, B: BufferMut<T>>(
         arc: ErasedArc,
         additional: usize,
         allocate: bool,
         start: NonNull<()>,
         length: usize,
     ) -> TryReserveResult<()> {
-        unsafe { Self::update_capacity::<T, B>(arc) };
-        let inner = unsafe { arc.cast::<ArcInner<AtomicUsize, B, ()>>().as_mut() };
+        unsafe { Self::update_capacity::<T, C, B>(arc) };
+        let inner = unsafe { arc.cast::<ArcInner<C, B, ()>>().as_mut() };
         let base = inner.buffer.as_mut_ptr();
         let offset = unsafe { sub_ptr(start.as_ptr().cast::<T>(), base.as_ptr()) };
         if inner.buffer.capacity() - offset - length >= additional {
@@ -172,42 +176,41 @@ impl VTable {
     }
 
     fn new<T: Send + Sync + 'static, B: Buffer<T>, M: Any>() -> &'static Self {
+        macro_rules! vtable {
+            (get_metadata: $get_metadata:expr) => {
+                &Self {
+                    dealloc: Self::dealloc::<(), B, M>,
+                    get_metadata: $get_metadata,
+                    take_buffer: Self::take_buffer_const::<T, B, M>,
+                    into_mut: None,
+                    try_reserve: None,
+                }
+            };
+        }
         if is_not!(M, ()) {
-            &Self {
-                dealloc: Self::dealloc::<(), B, M>,
-                get_metadata: Some(Self::get_metadata::<(), B, M>),
-                take_buffer: Self::take_buffer_const::<T, B, M>,
-                into_mut: None,
-                try_reserve: None,
-            }
+            vtable!(get_metadata: Some(Self::get_metadata::<(), B, M>))
         } else {
-            &Self {
-                dealloc: Self::dealloc::<(), B, M>,
-                get_metadata: None,
-                take_buffer: Self::take_buffer_const::<T, B, M>,
-                into_mut: None,
-                try_reserve: None,
-            }
+            vtable!(get_metadata: None)
         }
     }
 
-    fn new_mut<T: Send + Sync + 'static, B: BufferMut<T>, M: 'static>() -> &'static Self {
+    fn new_mut<T: Send + Sync + 'static, C: 'static, B: BufferMut<T>, M: 'static>() -> &'static Self
+    {
+        macro_rules! vtable {
+            (get_metadata: $get_metadata:expr) => {
+                &Self {
+                    dealloc: Self::dealloc_mut::<T, C, B, M>,
+                    get_metadata: $get_metadata,
+                    take_buffer: Self::take_buffer_mut::<T, C, B, M>,
+                    into_mut: Some(Self::into_mut::<T, C, B>),
+                    try_reserve: Some(Self::try_reserve::<T, C, B>),
+                }
+            };
+        }
         if is_not!(M, ()) {
-            &Self {
-                dealloc: Self::dealloc_mut::<T, B, M>,
-                get_metadata: Some(Self::get_metadata::<AtomicUsize, B, M>),
-                take_buffer: Self::take_buffer_mut::<T, B, M>,
-                into_mut: Some(Self::into_mut::<T, B>),
-                try_reserve: Some(Self::try_reserve::<T, B>),
-            }
+            vtable!(get_metadata: Some(Self::get_metadata::<C, B, M>))
         } else {
-            &Self {
-                dealloc: Self::dealloc_mut::<T, B, M>,
-                get_metadata: None,
-                take_buffer: Self::take_buffer_mut::<T, B, M>,
-                into_mut: Some(Self::into_mut::<T, B>),
-                try_reserve: Some(Self::try_reserve::<T, B>),
-            }
+            vtable!(get_metadata: None)
         }
     }
 }
@@ -254,15 +257,21 @@ impl Arc {
         (inner.into_arc(), start, len)
     }
 
-    pub(crate) fn new_mut<T: Send + Sync + 'static, B: BufferMut<T>, M: Send + Sync + 'static>(
+    fn new_mut_inner<
+        T: Send + Sync + 'static,
+        C: 'static,
+        B: BufferMut<T>,
+        M: Send + Sync + 'static,
+    >(
+        spare_capacity: C,
         buffer: B,
         metadata: M,
         rc: usize,
     ) -> (Self, NonNull<T>, usize, usize) {
         let mut inner = ArcGuard::new(ArcInner {
             rc: rc.into(),
-            vtable: VTable::new_mut::<T, B, M>(),
-            spare_capacity: AtomicUsize::new(usize::MAX),
+            vtable: VTable::new_mut::<T, C, B, M>(),
+            spare_capacity,
             buffer,
             metadata,
         });
@@ -270,6 +279,18 @@ impl Arc {
         let capacity = inner.get().buffer.capacity();
         let start = inner.get().buffer.as_mut_ptr();
         (inner.into_arc(), start, len, capacity)
+    }
+
+    pub(crate) fn new_mut<T: Send + Sync + 'static, B: BufferMut<T>, M: Send + Sync + 'static>(
+        buffer: B,
+        metadata: M,
+        rc: usize,
+    ) -> (Self, NonNull<T>, usize, usize) {
+        if mem::needs_drop::<T>() {
+            Self::new_mut_inner(AtomicUsize::new(usize::MAX), buffer, metadata, rc)
+        } else {
+            Self::new_mut_inner((), buffer, metadata, rc)
+        }
     }
 
     pub(crate) unsafe fn forget_vec<T>(self) {
