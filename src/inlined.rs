@@ -25,7 +25,7 @@ use crate::{
     ArcBytes, ArcStr,
 };
 
-const INLINED_TAG: u8 = 0x80;
+const INLINED_FLAG: u8 = 0x80;
 
 pub trait InlinedLayout {
     const LEN: usize;
@@ -68,7 +68,7 @@ impl<L: Layout> SmallBytes<L> {
         let mut this = Self {
             data: L::DEFAULT,
             offset: 0,
-            tagged_length: slice.len() as u8 | INLINED_TAG,
+            tagged_length: slice.len() as u8 | INLINED_FLAG,
         };
         let data = ptr_from_mut(&mut this.data).cast::<u8>();
         unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), data, slice.len()) }
@@ -76,11 +76,11 @@ impl<L: Layout> SmallBytes<L> {
     }
 
     const fn is_inlined(this: *const Self) -> bool {
-        unsafe { (*addr_of!((*this).tagged_length)) & INLINED_TAG != 0 }
+        unsafe { (*addr_of!((*this).tagged_length)) & INLINED_FLAG != 0 }
     }
 
     pub const fn len(&self) -> usize {
-        (self.tagged_length & !INLINED_TAG) as usize
+        (self.tagged_length & !INLINED_FLAG) as usize
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -94,7 +94,7 @@ impl<L: Layout> SmallBytes<L> {
 
     pub fn truncate(&mut self, len: usize) {
         if len < self.len() {
-            self.tagged_length = len as u8 | INLINED_TAG;
+            self.tagged_length = len as u8 | INLINED_FLAG;
         }
     }
 
@@ -110,7 +110,7 @@ impl<L: Layout> SmallBytes<L> {
         let (offset, len) = offset_len(self.len(), range);
         Self {
             offset: self.offset + offset as u8,
-            tagged_length: len as u8 | INLINED_TAG,
+            tagged_length: len as u8 | INLINED_FLAG,
             ..*self
         }
     }
