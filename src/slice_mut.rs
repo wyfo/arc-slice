@@ -12,7 +12,7 @@ use core::{
 
 use crate::{
     arc::{unit_metadata, Arc},
-    buffer::{can_reclaim, BufferMut, TryReserveError},
+    buffer::{reclaim, BufferMut, TryReserveError},
     layout::Layout,
     macros::is,
     rust_compat::{
@@ -393,8 +393,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         match self.inner() {
             Inner::Vec { offset } => {
                 let mut vec = unsafe { ManuallyDrop::new(self.rebuild_vec(offset)) };
-                if can_reclaim(vec.capacity(), offset, self.length, additional) {
-                    vec.drain(..offset);
+                if unsafe { reclaim(&mut *vec, offset, self.length, additional) } {
                     self.set_offset(0);
                     self.start = NonNull::new(vec.as_mut_ptr()).unwrap();
                     self.capacity = vec.capacity();

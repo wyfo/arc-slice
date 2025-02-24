@@ -1,5 +1,5 @@
 use alloc::{borrow::Cow, boxed::Box, string::String, sync::Arc, vec::Vec};
-use core::{fmt, ptr::NonNull};
+use core::{fmt, mem, ptr, ptr::NonNull};
 
 pub trait Buffer<T>: Send + 'static {
     fn as_slice(&self) -> &[T];
@@ -141,15 +141,11 @@ pub unsafe trait BufferMut<T>: Send + 'static {
 
     fn capacity(&self) -> usize;
 
-    fn shift_left(&mut self, by: usize) -> bool;
-
-    fn truncate(&mut self, len: usize) -> bool;
-
     /// # Safety
     ///
     /// - First `len` items of buffer slice must be initialized.
     /// - If `mem::needs_drop::<T>()`, then `len` must be greater or equal to [`Self::len`].
-    unsafe fn set_len(&mut self, len: usize);
+    unsafe fn set_len(&mut self, len: usize) -> bool;
 
     fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError>;
 
@@ -175,19 +171,10 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
         self.capacity()
     }
 
-    fn shift_left(&mut self, by: usize) -> bool {
-        self.drain(..by);
-        true
-    }
-
-    fn truncate(&mut self, len: usize) -> bool {
-        self.truncate(len);
-        true
-    }
-
-    unsafe fn set_len(&mut self, len: usize) {
+    unsafe fn set_len(&mut self, len: usize) -> bool {
         // SAFETY: same function contract
-        unsafe { self.set_len(len) }
+        unsafe { self.set_len(len) };
+        true
     }
 
     fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
@@ -217,15 +204,9 @@ unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
         self.as_slice().len()
     }
 
-    fn shift_left(&mut self, _by: usize) -> bool {
+    unsafe fn set_len(&mut self, _len: usize) -> bool {
         false
     }
-
-    fn truncate(&mut self, _len: usize) -> bool {
-        false
-    }
-
-    unsafe fn set_len(&mut self, _len: usize) {}
 
     fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError> {
         Err(TryReserveError::Unsupported)
@@ -259,13 +240,46 @@ const _: () = {
 };
 
 // from `BytesMut::reserve_inner`
-pub(crate) fn can_reclaim(
-    full_capacity: usize,
+pub(crate) unsafe fn reclaim<T, B: BufferMut<T>>(
+    buffer: &mut B,
     offset: usize,
     length: usize,
     additional: usize,
 ) -> bool {
-    full_capacity - length >= additional && offset >= length
+    if buffer.capacity() - length < additional || offset < length {
+        return false;
+    }
+    let buffer_ptr = buffer.as_mut_ptr().as_ptr();
+    if mem::needs_drop::<T>() {
+        let prev_len = buffer.len();
+        if unsafe { buffer.set_len(length) } {
+            unsafe {
+                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(buffer_ptr, offset));
+                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
+                    buffer_ptr.add(offset + length),
+                    prev_len - offset - length,
+                ));
+            }
+        }
+    }
+    unsafe { ptr::copy_nonoverlapping(buffer_ptr.add(offset), buffer_ptr, length) };
+    true
+}
+
+pub(crate) unsafe fn truncate<T, B: BufferMut<T>>(buffer: &mut B, length: usize) -> bool {
+    let prev_len = buffer.len();
+    if !unsafe { buffer.set_len(length) } {
+        return false;
+    }
+    if mem::needs_drop::<T>() {
+        unsafe {
+            ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
+                buffer.as_mut_ptr().as_ptr().add(length),
+                prev_len - length,
+            ));
+        }
+    }
+    true
 }
 
 pub trait StringBuffer: Send + 'static {

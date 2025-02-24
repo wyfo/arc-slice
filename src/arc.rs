@@ -9,7 +9,7 @@ use core::{
 };
 
 use crate::{
-    buffer::{can_reclaim, Buffer, BufferMut, TryReserveError},
+    buffer::{reclaim, truncate, Buffer, BufferMut, TryReserveError},
     loom::{
         atomic_usize_with_mut,
         sync::{
@@ -148,14 +148,17 @@ impl VTable {
         let inner = unsafe { arc.cast::<ArcInner<AtomicUsize, B, ()>>().as_mut() };
         let base = inner.buffer.as_mut_ptr();
         let offset = unsafe { sub_ptr(start.as_ptr().cast::<T>(), base.as_ptr()) };
-        if can_reclaim(inner.buffer.capacity(), offset, length, additional)
-            && inner.buffer.shift_left(offset)
-        {
+        if inner.buffer.capacity() - offset - length >= additional {
+            return (Ok(inner.buffer.capacity()), unsafe {
+                non_null_add(inner.buffer.as_mut_ptr(), offset).cast()
+            });
+        }
+        if unsafe { reclaim(&mut inner.buffer, offset, length, additional) } {
             return (
                 Ok(inner.buffer.capacity()),
                 inner.buffer.as_mut_ptr().cast(),
             );
-        } else if !allocate || !inner.buffer.truncate(offset + length) {
+        } else if !allocate || !unsafe { truncate(&mut inner.buffer, offset + length) } {
             let start = unsafe { non_null_add(base, offset).cast() };
             return (Err(TryReserveError::Unsupported), start);
         }
