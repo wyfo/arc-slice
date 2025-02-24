@@ -21,7 +21,7 @@ use crate::{
         sync::atomic::{AtomicPtr, Ordering},
     },
     macros::is,
-    rust_compat::{non_null_add, ptr_addr, sub_ptr, without_provenance_mut},
+    rust_compat::{non_null_add, non_null_sub_ptr, ptr_addr, without_provenance_mut},
     utils::{
         debug_slice, offset_len, offset_len_subslice, offset_len_subslice_unchecked,
         panic_out_of_range, shrink_vec,
@@ -69,10 +69,10 @@ pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = Compact> {
 const VEC_FLAG: usize = 1;
 const VEC_CAPA_SHIFT: usize = 1;
 
-enum Inner {
+enum Inner<T> {
     Static,
     Vec { capacity: NonZeroUsize },
-    Arc(ManuallyDrop<Arc>),
+    Arc(ManuallyDrop<Arc<T>>),
 }
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
@@ -125,7 +125,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             return Self::new_static(&[]);
         }
         let Some(base) = L::get_base(&mut vec) else {
-            let (arc, start, length, _) = Arc::new_mut(vec, (), 1);
+            let (arc, start, length) = Arc::new(vec, (), 1);
             return unsafe { Self::from_arc(arc, start, length) };
         };
         let mut vec = ManuallyDrop::new(vec);
@@ -141,7 +141,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     /// # Safety
     ///
     /// `start` and `length` must represent a valid slice for the buffer contained in `arc`.
-    pub(crate) unsafe fn from_arc(arc: Arc, start: NonNull<T>, length: usize) -> Self {
+    pub(crate) unsafe fn from_arc(arc: Arc<T>, start: NonNull<T>, length: usize) -> Self {
         Self {
             arc_or_capa: AtomicPtr::new(arc.into_ptr().as_ptr()),
             base: MaybeUninit::uninit(),
@@ -165,7 +165,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     unsafe fn rebuild_vec(&self, capacity: NonZeroUsize) -> Vec<T> {
         let (ptr, len) = match L::base_into_ptr(unsafe { self.base.assume_init() }) {
             Some(base) => {
-                let len = unsafe { sub_ptr(self.start.as_ptr(), base.as_ptr()) } + self.length;
+                let len = unsafe { non_null_sub_ptr(self.start, base) } + self.length;
                 (base.as_ptr(), len)
             }
             None => {
@@ -185,7 +185,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[inline(always)]
-    fn inner(&self, arc_or_capa: *mut ()) -> Inner {
+    fn inner(&self, arc_or_capa: *mut ()) -> Inner<T> {
         match NonNull::new(arc_or_capa) {
             Some(_) if ptr_addr(arc_or_capa) & VEC_FLAG != 0 => Inner::Vec {
                 capacity: unsafe {
@@ -197,7 +197,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
-    fn inner_mut(&mut self) -> Inner {
+    fn inner_mut(&mut self) -> Inner<T> {
         let arc_or_capa = atomic_ptr_with_mut(&mut self.arc_or_capa, |ptr| *ptr);
         self.inner(arc_or_capa)
     }
@@ -439,7 +439,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     #[cold]
     fn clone_vec(&self, arc_or_capa: *mut (), capacity: NonZeroUsize) -> Self {
         let vec = unsafe { self.rebuild_vec(capacity) };
-        let (arc, _, _, _) = Arc::new_mut(vec, (), 2);
+        let (arc, _, _) = Arc::new(vec, (), 2);
         let arc_ptr = arc.into_ptr();
         // Release ordering must be used to ensure the arc vtable is visible
         // by `get_metadata`. In case of failure, the read arc is cloned with
@@ -452,7 +452,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         ) {
             Ok(_) => unsafe { Arc::from_ptr(arc_ptr) },
             Err(ptr) => {
-                unsafe { Arc::from_ptr(arc_ptr).forget_vec::<T>() };
+                unsafe { Arc::<T>::from_ptr(arc_ptr).forget_vec() };
                 let arc = unsafe { Arc::from_ptr(NonNull::new(ptr).unwrap_unchecked()) };
                 (*ManuallyDrop::new(arc)).clone()
             }

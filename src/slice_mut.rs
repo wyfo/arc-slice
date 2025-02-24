@@ -12,7 +12,7 @@ use core::{
 
 use crate::{
     arc::{unit_metadata, Arc},
-    buffer::{reclaim, BufferMut, TryReserveError},
+    buffer::{BufferMut, BufferMutExt, TryReserveError},
     layout::Layout,
     macros::is,
     rust_compat::{
@@ -32,12 +32,12 @@ pub struct ArcSliceMut<T: Send + Sync + 'static> {
 const VEC_FLAG: usize = 0b01;
 const VEC_CAPA_SHIFT: usize = 1;
 
-enum Inner {
+enum Inner<T> {
     Vec {
         offset: usize,
     },
     Arc {
-        arc: ManuallyDrop<Arc>,
+        arc: ManuallyDrop<Arc<T>>,
         is_tail: bool,
     },
 }
@@ -86,9 +86,9 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.capacity - self.length
     }
 
-    fn update_arc_spare_capacity(&self, arc: &Arc, is_tail: bool) {
+    fn update_arc_spare_capacity(&self, arc: &Arc<T>, is_tail: bool) {
         if is_tail {
-            arc.set_spare_capacity(self.spare_capacity());
+            unsafe { arc.set_spare_capacity(self.spare_capacity()) };
         }
     }
 
@@ -121,21 +121,18 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.length = len;
     }
 
-    pub(crate) fn from_arc<B: BufferMut<T>>(buffer: &mut B, arc: Arc) -> Self {
-        // convert the arc before executing `BufferMut` method in case of panic,
-        // so the `Arc` will not be dropped
-        let arc_or_offset = arc.into_ptr();
+    pub(crate) fn from_arc(start: NonNull<T>, length: usize, capacity: usize, arc: Arc<T>) -> Self {
         Self {
-            start: buffer.as_mut_ptr(),
-            length: buffer.len(),
-            capacity: buffer.capacity(),
-            arc_or_offset,
+            start,
+            length,
+            capacity,
+            arc_or_offset: arc.into_ptr(),
         }
         .with_tail_flag()
     }
 
     #[inline(always)]
-    fn inner(&self) -> Inner {
+    fn inner(&self) -> Inner<T> {
         let arc_or_offset = non_null_addr(self.arc_or_offset).get();
         if arc_or_offset & VEC_FLAG != 0 {
             Inner::Vec {
@@ -393,7 +390,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         match self.inner() {
             Inner::Vec { offset } => {
                 let mut vec = unsafe { ManuallyDrop::new(self.rebuild_vec(offset)) };
-                if unsafe { reclaim(&mut *vec, offset, self.length, additional) } {
+                if unsafe { vec.try_reclaim(offset, self.length, additional) } {
                     self.set_offset(0);
                     self.start = NonNull::new(vec.as_mut_ptr()).unwrap();
                     self.capacity = vec.capacity();

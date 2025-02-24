@@ -48,6 +48,10 @@ pub(crate) unsafe fn sub_ptr<T>(ptr: *const T, origin: *const T) -> usize {
     unsafe { ptr.offset_from(origin).try_into().unwrap_unchecked() }
 }
 
+pub(crate) unsafe fn non_null_sub_ptr<T>(ptr: NonNull<T>, origin: NonNull<T>) -> usize {
+    unsafe { sub_ptr(ptr.as_ptr(), origin.as_ptr()) }
+}
+
 pub(crate) fn box_into_nonnull<T>(ptr: Box<T>) -> NonNull<T> {
     NonNull::new(Box::into_raw(ptr)).unwrap()
 }

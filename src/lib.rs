@@ -26,3 +26,8 @@ pub use crate::{
 
 pub type ArcBytes<L = layout::Compact> = ArcSlice<u8, L>;
 pub type ArcBytesMut = ArcSliceMut<u8>;
+
+#[inline(never)]
+pub fn clone_arcslice(bytes: &ArcBytes) -> ArcBytes {
+    bytes.clone()
+}
