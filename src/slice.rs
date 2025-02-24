@@ -368,6 +368,18 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
+    pub fn into_cow(mut self) -> Cow<'static, [T]>
+    where
+        T: Clone,
+    {
+        match self.inner_mut() {
+            Inner::Static => unsafe {
+                mem::transmute::<&[T], &'static [T]>(self.as_slice()).into()
+            },
+            _ => self.into_vec().into(),
+        }
+    }
+
     pub fn get_metadata<M: Any>(&self) -> Option<&M> {
         match self.inner(self.arc_or_capa.load(Ordering::Acquire)) {
             Inner::Arc(arc) => arc.get_metadata(),
@@ -633,6 +645,12 @@ std_impl!(&'static [T], @N &'static [T; N], @N [T; N], Box<[T]>, Vec<T>, Cow<'st
 impl<T: Clone + Send + Sync + 'static, L: Layout> From<ArcSlice<T, L>> for Vec<T> {
     fn from(value: ArcSlice<T, L>) -> Self {
         value.into_vec()
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static, L: Layout> From<ArcSlice<T, L>> for Cow<'static, [T]> {
+    fn from(value: ArcSlice<T, L>) -> Self {
+        value.into_cow()
     }
 }
 
