@@ -399,7 +399,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
                     self.capacity = vec.capacity();
                     return Ok(());
                 } else if !allocate {
-                    return Err(TryReserveError::AllocError);
+                    return Err(TryReserveError::Unsupported);
                 }
                 BufferMut::try_reserve(&mut *vec, additional)?;
                 let new_start = unsafe { vec.as_mut_ptr().add(offset) };
