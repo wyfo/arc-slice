@@ -5,11 +5,13 @@ pub trait Buffer<T>: Send + 'static {
     fn as_slice(&self) -> &[T];
 
     #[doc(hidden)]
+    #[inline(always)]
     fn is_array(&self) -> bool {
         false
     }
 
     #[doc(hidden)]
+    #[inline(always)]
     fn try_into_static(self) -> Result<&'static [T], Self>
     where
         Self: Sized,
@@ -18,6 +20,7 @@ pub trait Buffer<T>: Send + 'static {
     }
 
     #[doc(hidden)]
+    #[inline(always)]
     fn try_into_vec(self) -> Result<Vec<T>, Self>
     where
         Self: Sized,
@@ -31,6 +34,7 @@ impl<T: Send + Sync + 'static> Buffer<T> for &'static [T] {
         self
     }
 
+    #[inline(always)]
     fn try_into_static(self) -> Result<&'static [T], Self>
     where
         Self: Sized,
@@ -40,20 +44,24 @@ impl<T: Send + Sync + 'static> Buffer<T> for &'static [T] {
 }
 
 impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for [T; N] {
+    #[inline]
     fn as_slice(&self) -> &[T] {
         self
     }
 
+    #[inline]
     fn is_array(&self) -> bool {
         true
     }
 }
 
 impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for &'static [T; N] {
+    #[inline]
     fn as_slice(&self) -> &[T] {
         *self
     }
 
+    #[inline(always)]
     fn try_into_static(self) -> Result<&'static [T], Self>
     where
         Self: Sized,
@@ -63,10 +71,12 @@ impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for &'static [T; N] {
 }
 
 impl<T: Send + Sync + 'static> Buffer<T> for Box<[T]> {
+    #[inline]
     fn as_slice(&self) -> &[T] {
         self
     }
 
+    #[inline(always)]
     fn try_into_vec(self) -> Result<Vec<T>, Self>
     where
         Self: Sized,
@@ -76,10 +86,12 @@ impl<T: Send + Sync + 'static> Buffer<T> for Box<[T]> {
 }
 
 impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
+    #[inline]
     fn as_slice(&self) -> &[T] {
         self
     }
 
+    #[inline(always)]
     fn try_into_vec(self) -> Result<Vec<T>, Self>
     where
         Self: Sized,
@@ -89,10 +101,12 @@ impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> Buffer<T> for Cow<'static, [T]> {
+    #[inline]
     fn as_slice(&self) -> &[T] {
         self
     }
 
+    #[inline(always)]
     fn try_into_static(self) -> Result<&'static [T], Self>
     where
         Self: Sized,
@@ -103,6 +117,7 @@ impl<T: Clone + Send + Sync + 'static> Buffer<T> for Cow<'static, [T]> {
         }
     }
 
+    #[inline(always)]
     fn try_into_vec(self) -> Result<Vec<T>, Self>
     where
         Self: Sized,
@@ -115,6 +130,7 @@ impl<T: Clone + Send + Sync + 'static> Buffer<T> for Cow<'static, [T]> {
 }
 
 impl<T: Send + Sync + 'static> Buffer<T> for Arc<[T]> {
+    #[inline]
     fn as_slice(&self) -> &[T] {
         self
     }
@@ -147,24 +163,29 @@ pub unsafe trait BufferMut<T>: Buffer<T> {
 }
 
 unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
+    #[inline]
     fn as_mut_ptr(&mut self) -> NonNull<T> {
         NonNull::new(self.as_mut_ptr()).unwrap()
     }
 
+    #[inline]
     fn len(&self) -> usize {
         self.len()
     }
 
+    #[inline]
     fn capacity(&self) -> usize {
         self.capacity()
     }
 
+    #[inline]
     unsafe fn set_len(&mut self, len: usize) -> bool {
         // SAFETY: same function contract
         unsafe { self.set_len(len) };
         true
     }
 
+    #[inline]
     fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         let overflow = self.len().saturating_add(additional) > isize::MAX as usize;
         match self.try_reserve(additional) {
@@ -176,22 +197,27 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
 }
 
 unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
+    #[inline]
     fn as_mut_ptr(&mut self) -> NonNull<T> {
         NonNull::new(self.as_mut_slice().as_mut_ptr()).unwrap()
     }
 
+    #[inline]
     fn len(&self) -> usize {
         self.as_slice().len()
     }
 
+    #[inline]
     fn capacity(&self) -> usize {
         self.as_slice().len()
     }
 
+    #[inline]
     unsafe fn set_len(&mut self, _len: usize) -> bool {
         false
     }
 
+    #[inline]
     fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError> {
         Err(TryReserveError::Unsupported)
     }
@@ -287,6 +313,7 @@ pub trait StringBuffer: Send + 'static {
     fn as_str(&self) -> &str;
 
     #[doc(hidden)]
+    #[inline(always)]
     fn try_into_static(self) -> Result<&'static str, Self>
     where
         Self: Sized,
@@ -295,6 +322,7 @@ pub trait StringBuffer: Send + 'static {
     }
 
     #[doc(hidden)]
+    #[inline(always)]
     fn try_into_string(self) -> Result<String, Self>
     where
         Self: Sized,
@@ -304,10 +332,12 @@ pub trait StringBuffer: Send + 'static {
 }
 
 impl StringBuffer for &'static str {
+    #[inline]
     fn as_str(&self) -> &str {
         self
     }
 
+    #[inline(always)]
     fn try_into_static(self) -> Result<&'static str, Self>
     where
         Self: Sized,
@@ -317,10 +347,12 @@ impl StringBuffer for &'static str {
 }
 
 impl StringBuffer for Box<str> {
+    #[inline]
     fn as_str(&self) -> &str {
         self
     }
 
+    #[inline(always)]
     fn try_into_string(self) -> Result<String, Self>
     where
         Self: Sized,
@@ -330,10 +362,12 @@ impl StringBuffer for Box<str> {
 }
 
 impl StringBuffer for String {
+    #[inline]
     fn as_str(&self) -> &str {
         self
     }
 
+    #[inline(always)]
     fn try_into_string(self) -> Result<String, Self>
     where
         Self: Sized,
@@ -343,10 +377,12 @@ impl StringBuffer for String {
 }
 
 impl StringBuffer for Cow<'static, str> {
+    #[inline]
     fn as_str(&self) -> &str {
         self
     }
 
+    #[inline(always)]
     fn try_into_static(self) -> Result<&'static str, Self>
     where
         Self: Sized,
@@ -357,6 +393,7 @@ impl StringBuffer for Cow<'static, str> {
         }
     }
 
+    #[inline(always)]
     fn try_into_string(self) -> Result<String, Self>
     where
         Self: Sized,

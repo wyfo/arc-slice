@@ -49,15 +49,18 @@ impl<B: StringBuffer> Buffer<u8> for StringBufWrapper<B> {
 pub struct ArcStr<L: Layout = Compact>(ArcBytes<L>);
 
 impl<L: Layout> ArcStr<L> {
+    #[inline]
     pub fn new<B: StringBuffer>(buffer: B) -> Self {
         unsafe { Self::from_utf8_unchecked(ArcBytes::new(StringBufWrapper(buffer))) }
     }
 
     #[cfg(not(all(loom, test)))]
+    #[inline]
     pub const fn new_static(s: &'static str) -> Self {
         unsafe { Self::from_utf8_unchecked(ArcBytes::new_static(s.as_bytes())) }
     }
 
+    #[inline]
     pub fn from_utf8(bytes: ArcBytes<L>) -> Result<Self, FromUtf8Error<ArcBytes<L>>> {
         match core::str::from_utf8(bytes.as_slice()) {
             Ok(_) => Ok(Self(bytes)),
@@ -68,32 +71,39 @@ impl<L: Layout> ArcStr<L> {
     /// # Safety
     ///
     /// Bytes must be valid UTF-8.
+    #[inline]
     pub const unsafe fn from_utf8_unchecked(bytes: ArcBytes<L>) -> Self {
         Self(bytes)
     }
 
+    #[inline]
     pub const fn len(&self) -> usize {
         self.0.len()
     }
 
+    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    #[inline]
     pub const fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
     }
 
+    #[inline]
     pub fn truncate(&mut self, len: usize) {
         check_char_boundary(self, len);
         self.0.truncate(len);
     }
 
+    #[inline]
     pub fn advance(&mut self, offset: usize) {
         check_char_boundary(self, offset);
         self.0.advance(offset);
     }
 
+    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         let (offset, len) = offset_len(self.len(), range);
         check_char_boundary(self, offset);
@@ -101,26 +111,46 @@ impl<L: Layout> ArcStr<L> {
         unsafe { Self::from_utf8_unchecked(self.0.subslice_impl(offset, len)) }
     }
 
+    #[inline]
     pub fn subslice_from_ref(&self, subset: &str) -> Self {
         unsafe { Self::from_utf8_unchecked(self.0.subslice_from_ref(subset.as_bytes())) }
     }
 
+    #[inline]
     #[must_use = "consider `ArcString::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
         check_char_boundary(self, at);
         unsafe { Self::from_utf8_unchecked(self.0.split_off(at)) }
     }
 
+    #[inline]
     #[must_use = "consider `ArcString::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {
         check_char_boundary(self, at);
         unsafe { Self::from_utf8_unchecked(self.0.split_to(at)) }
     }
 
+    #[inline]
+    pub fn into_string(self) -> String {
+        unsafe { String::from_utf8_unchecked(self.0.into_vec()) }
+    }
+
+    #[inline]
+    pub fn into_cow(self) -> Cow<'static, str> {
+        unsafe {
+            match self.0.into_cow() {
+                Cow::Borrowed(s) => Cow::Borrowed(core::str::from_utf8_unchecked(s)),
+                Cow::Owned(s) => Cow::Owned(String::from_utf8_unchecked(s)),
+            }
+        }
+    }
+
+    #[inline]
     pub fn get_metadata<M: Any>(&self) -> Option<&M> {
         self.0.get_metadata()
     }
 
+    #[inline]
     pub fn downcast_buffer<B: StringBuffer>(self) -> Result<B, Self> {
         if is!(B, &'static str) {
             let mut buffer = MaybeUninit::<B>::uninit();
@@ -142,14 +172,17 @@ impl<L: Layout> ArcStr<L> {
             .map(|s| s.0)
     }
 
+    #[inline]
     pub fn as_slice(&self) -> &ArcBytes<L> {
         &self.0
     }
 
+    #[inline]
     pub fn into_slice(self) -> ArcBytes<L> {
         self.0
     }
 
+    #[inline]
     pub fn with_layout<L2: Layout>(self) -> ArcStr<L2> {
         ArcStr(self.0.with_layout())
     }
@@ -158,24 +191,28 @@ impl<L: Layout> ArcStr<L> {
 impl<L: Layout> Deref for ArcStr<L> {
     type Target = str;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_str()
     }
 }
 
 impl<L: Layout> AsRef<str> for ArcStr<L> {
+    #[inline]
     fn as_ref(&self) -> &str {
         self
     }
 }
 
 impl<L: Layout> AsRef<[u8]> for ArcStr<L> {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
     }
 }
 
 impl<L: Layout> Hash for ArcStr<L> {
+    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -185,12 +222,14 @@ impl<L: Layout> Hash for ArcStr<L> {
 }
 
 impl<L: Layout> Borrow<str> for ArcStr<L> {
+    #[inline]
     fn borrow(&self) -> &str {
         self
     }
 }
 
 impl<L: Layout> Clone for ArcStr<L> {
+    #[inline]
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
@@ -198,6 +237,7 @@ impl<L: Layout> Clone for ArcStr<L> {
 
 #[cfg(not(all(loom, test)))]
 impl<L: Layout> Default for ArcStr<L> {
+    #[inline]
     fn default() -> Self {
         Self::new_static("")
     }
@@ -278,6 +318,7 @@ macro_rules! std_impl {
     ($($ty:ty),*) => {$(
         impl<L: Layout> From<$ty> for ArcStr<L> {
 
+            #[inline]
             fn from(value: $ty) -> Self {
                 Self::new(value)
             }
@@ -286,9 +327,24 @@ macro_rules! std_impl {
 }
 std_impl!(&'static str, Box<str>, String, Cow<'static, str>);
 
+impl<L: Layout> From<ArcStr<L>> for String {
+    #[inline]
+    fn from(value: ArcStr<L>) -> Self {
+        value.into_string()
+    }
+}
+
+impl<L: Layout> From<ArcStr<L>> for Cow<'static, str> {
+    #[inline]
+    fn from(value: ArcStr<L>) -> Self {
+        value.into_cow()
+    }
+}
+
 impl<L: Layout> FromStr for ArcStr<L> {
     type Err = Infallible;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(ArcBytes::from_slice(s.as_bytes())))
     }
@@ -297,12 +353,14 @@ impl<L: Layout> FromStr for ArcStr<L> {
 impl<L: Layout> TryFrom<ArcBytes<L>> for ArcStr<L> {
     type Error = FromUtf8Error<ArcBytes<L>>;
 
+    #[inline]
     fn try_from(value: ArcBytes<L>) -> Result<Self, Self::Error> {
         Self::from_utf8(value)
     }
 }
 
 impl<L: Layout> From<ArcStr<L>> for ArcBytes<L> {
+    #[inline]
     fn from(value: ArcStr<L>) -> Self {
         value.into_slice()
     }

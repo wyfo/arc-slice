@@ -82,6 +82,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[cfg(not(all(loom, test)))]
+    #[inline]
     pub const fn new_static(slice: &'static [T]) -> Self {
         Self {
             arc_or_capa: AtomicPtr::new(ptr::null_mut()),
@@ -205,6 +206,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
+    #[inline(always)]
     fn inner_mut(&mut self) -> Inner<T> {
         let arc_or_capa = atomic_ptr_with_mut(&mut self.arc_or_capa, |ptr| *ptr);
         self.inner(arc_or_capa)
@@ -225,6 +227,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         unsafe { core::slice::from_raw_parts(self.start.as_ptr(), self.len()) }
     }
 
+    #[inline]
     pub fn get_ref(&self, range: impl RangeBounds<usize>) -> ArcSliceRef<T, L> {
         let (offset, len) = offset_len(self.length, range);
         ArcSliceRef {
@@ -233,6 +236,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
+    #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len >= self.length {
             return;
@@ -266,6 +270,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         self.length = len;
     }
 
+    #[inline]
     pub fn advance(&mut self, offset: usize) {
         if offset > self.length {
             panic_out_of_range();
@@ -300,16 +305,19 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         clone
     }
 
+    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         let (offset, len) = offset_len(self.length, range);
         unsafe { self.subslice_impl(offset, len) }
     }
 
+    #[inline]
     pub fn subslice_from_ref(&self, subset: &[T]) -> Self {
         let (offset, len) = offset_len_subslice(self, subset);
         unsafe { self.subslice_impl(offset, len) }
     }
 
+    #[inline]
     #[must_use = "consider `ArcSlice::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
         if at == 0 {
@@ -326,6 +334,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         clone
     }
 
+    #[inline]
     #[must_use = "consider `ArcSlice::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {
         if at == 0 {
@@ -342,6 +351,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         clone
     }
 
+    #[inline]
     pub fn try_into_mut(mut self) -> Result<ArcSliceMut<T>, Self> {
         let mut slice_mut = match self.inner_mut() {
             Inner::Static => return Err(self),
@@ -356,6 +366,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         Ok(slice_mut)
     }
 
+    #[inline]
     pub fn into_vec(self) -> Vec<T>
     where
         T: Clone,
@@ -376,6 +387,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
+    #[inline]
     pub fn into_cow(mut self) -> Cow<'static, [T]>
     where
         T: Clone,
@@ -388,6 +400,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
+    #[inline]
     pub fn get_metadata<M: Any>(&self) -> Option<&M> {
         match self.inner(self.arc_or_capa.load(Ordering::Acquire)) {
             Inner::Arc(arc) => arc.get_metadata(),
@@ -396,6 +409,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
+    #[inline]
     pub fn downcast_buffer<B: Buffer<T>>(mut self) -> Result<B, Self> {
         let mut buffer = MaybeUninit::<B>::uninit();
         match self.inner_mut() {
@@ -421,6 +435,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         Ok(unsafe { buffer.assume_init() })
     }
 
+    #[inline]
     pub fn is_unique(&self) -> bool {
         match self.inner(self.arc_or_capa.load(Ordering::Acquire)) {
             Inner::Static => false,
@@ -473,6 +488,7 @@ unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSlice<T, L> {}
 unsafe impl<T: Send + Sync + 'static, L: Layout> Sync for ArcSlice<T, L> {}
 
 impl<T: Send + Sync + 'static, L: Layout> Drop for ArcSlice<T, L> {
+    #[inline]
     fn drop(&mut self) {
         match self.inner_mut() {
             Inner::Static => {}
@@ -505,18 +521,21 @@ impl<T: Send + Sync + 'static, L: Layout> Clone for ArcSlice<T, L> {
 impl<T: Send + Sync + 'static, L: Layout> Deref for ArcSlice<T, L> {
     type Target = [T];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_slice()
     }
 }
 
 impl<T: Send + Sync + 'static, L: Layout> AsRef<[T]> for ArcSlice<T, L> {
+    #[inline]
     fn as_ref(&self) -> &[T] {
         self
     }
 }
 
 impl<T: Hash + Send + Sync + 'static, L: Layout> Hash for ArcSlice<T, L> {
+    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -526,6 +545,7 @@ impl<T: Hash + Send + Sync + 'static, L: Layout> Hash for ArcSlice<T, L> {
 }
 
 impl<T: Send + Sync + 'static, L: Layout> Borrow<[T]> for ArcSlice<T, L> {
+    #[inline]
     fn borrow(&self) -> &[T] {
         self
     }
@@ -533,6 +553,7 @@ impl<T: Send + Sync + 'static, L: Layout> Borrow<[T]> for ArcSlice<T, L> {
 
 #[cfg(not(all(loom, test)))]
 impl<T: Send + Sync + 'static, L: Layout> Default for ArcSlice<T, L> {
+    #[inline]
     fn default() -> Self {
         Self::new_static(&[])
     }
@@ -642,6 +663,7 @@ macro_rules! std_impl {
     ($($(@$N:ident)? $ty:ty $(: $bound:path)?),*) => {$(
         impl<T: $($bound +)? Send + Sync + 'static, L: Layout, $(const $N: usize,)?> From<$ty> for ArcSlice<T, L> {
 
+            #[inline]
             fn from(value: $ty) -> Self {
                 Self::new(value)
             }
@@ -651,12 +673,14 @@ macro_rules! std_impl {
 std_impl!(&'static [T], @N &'static [T; N], @N [T; N], Box<[T]>, Vec<T>, Cow<'static, [T]>: Clone);
 
 impl<T: Clone + Send + Sync + 'static, L: Layout> From<ArcSlice<T, L>> for Vec<T> {
+    #[inline]
     fn from(value: ArcSlice<T, L>) -> Self {
         value.into_vec()
     }
 }
 
 impl<T: Clone + Send + Sync + 'static, L: Layout> From<ArcSlice<T, L>> for Cow<'static, [T]> {
+    #[inline]
     fn from(value: ArcSlice<T, L>) -> Self {
         value.into_cow()
     }
@@ -671,6 +695,7 @@ pub struct ArcSliceRef<'a, T: Send + Sync + 'static, L: Layout = Compact> {
 impl<T: Send + Sync + 'static, L: Layout> Deref for ArcSliceRef<'_, T, L> {
     type Target = [T];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.slice
     }
@@ -683,6 +708,7 @@ impl<T: fmt::Debug + Send + Sync + 'static, L: Layout> fmt::Debug for ArcSliceRe
 }
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSliceRef<'_, T, L> {
+    #[inline]
     pub fn into_arc(self) -> ArcSlice<T, L> {
         let (offset, len) = unsafe { offset_len_subslice_unchecked(self.arc_slice, self.slice) };
         unsafe { self.arc_slice.subslice_impl(offset, len) }

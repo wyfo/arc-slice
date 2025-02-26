@@ -61,6 +61,7 @@ pub struct SmallBytes<L: Layout> {
 impl<L: Layout> SmallBytes<L> {
     const MAX_LEN: usize = L::LEN;
 
+    #[inline]
     pub fn new(slice: &[u8]) -> Option<Self> {
         if slice.len() > Self::MAX_LEN {
             return None;
@@ -75,29 +76,35 @@ impl<L: Layout> SmallBytes<L> {
         Some(this)
     }
 
+    #[inline(always)]
     const fn is_inlined(this: *const Self) -> bool {
         unsafe { (*addr_of!((*this).tagged_length)) & INLINED_FLAG != 0 }
     }
 
+    #[inline]
     pub const fn len(&self) -> usize {
         (self.tagged_length & !INLINED_FLAG) as usize
     }
 
+    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline]
     pub const fn as_slice(&self) -> &[u8] {
         let data = ptr_from_ref(&self.data).cast::<u8>();
         unsafe { slice::from_raw_parts(data.add(self.offset as usize), self.len()) }
     }
 
+    #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.len() {
             self.tagged_length = len as u8 | INLINED_FLAG;
         }
     }
 
+    #[inline]
     pub fn advance(&mut self, offset: usize) {
         if offset > self.len() {
             panic_out_of_range()
@@ -106,6 +113,7 @@ impl<L: Layout> SmallBytes<L> {
         self.tagged_length -= offset as u8;
     }
 
+    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         let (offset, len) = offset_len(self.len(), range);
         Self {
@@ -117,6 +125,7 @@ impl<L: Layout> SmallBytes<L> {
 }
 
 impl<L: Layout> Clone for SmallBytes<L> {
+    #[inline]
     fn clone(&self) -> Self {
         *self
     }
@@ -127,18 +136,21 @@ impl<L: Layout> Copy for SmallBytes<L> {}
 impl<L: Layout> Deref for SmallBytes<L> {
     type Target = [u8];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_slice()
     }
 }
 
 impl<L: Layout> AsRef<[u8]> for SmallBytes<L> {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         self
     }
 }
 
 impl<L: Layout> Hash for SmallBytes<L> {
+    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -148,12 +160,14 @@ impl<L: Layout> Hash for SmallBytes<L> {
 }
 
 impl<L: Layout> Borrow<[u8]> for SmallBytes<L> {
+    #[inline]
     fn borrow(&self) -> &[u8] {
         self
     }
 }
 
 impl<L: Layout> Default for SmallBytes<L> {
+    #[inline]
     fn default() -> Self {
         Self::new(&[]).unwrap()
     }
@@ -283,6 +297,7 @@ impl<L: Layout> SmallArcBytes<L> {
         }
     }
 
+    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         match self.as_either() {
             Either::Left(bytes) => Self(Inner {
@@ -296,6 +311,7 @@ impl<L: Layout> SmallArcBytes<L> {
 }
 
 impl<L: Layout> Drop for SmallArcBytes<L> {
+    #[inline]
     fn drop(&mut self) {
         if let Either::Right(bytes) = self.as_either_mut() {
             unsafe { ptr::drop_in_place(bytes) }
@@ -318,18 +334,21 @@ impl<L: Layout> Clone for SmallArcBytes<L> {
 impl<L: Layout> Deref for SmallArcBytes<L> {
     type Target = [u8];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_slice()
     }
 }
 
 impl<L: Layout> AsRef<[u8]> for SmallArcBytes<L> {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         self
     }
 }
 
 impl<L: Layout> Hash for SmallArcBytes<L> {
+    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -339,6 +358,7 @@ impl<L: Layout> Hash for SmallArcBytes<L> {
 }
 
 impl<L: Layout> Borrow<[u8]> for SmallArcBytes<L> {
+    #[inline]
     fn borrow(&self) -> &[u8] {
         self
     }
@@ -346,6 +366,7 @@ impl<L: Layout> Borrow<[u8]> for SmallArcBytes<L> {
 
 #[cfg(not(all(loom, test)))]
 impl<L: Layout> Default for SmallArcBytes<L> {
+    #[inline]
     fn default() -> Self {
         ArcBytes::new_static(&[]).into()
     }
@@ -399,6 +420,7 @@ macro_rules! std_impl {
     ($($(@$N:ident)? $ty:ty $(: $bound:path)?),*) => {$(
         impl<L: Layout, $(const $N: usize,)?> From<$ty> for SmallArcBytes<L> {
 
+    #[inline]
             fn from(value: $ty) -> Self {
                 Self::new(value)
             }
@@ -408,6 +430,7 @@ macro_rules! std_impl {
 std_impl!(&'static [u8], @N &'static [u8; N], @N [u8; N], Box<[u8]>, Vec<u8>, Cow<'static, [u8]>: Clone);
 
 impl<L: Layout> From<Either<SmallBytes<L>, ArcBytes<L>>> for SmallArcBytes<L> {
+    #[inline]
     fn from(value: Either<SmallBytes<L>, ArcBytes<L>>) -> Self {
         match value {
             Either::Left(bytes) => Self(Inner { small: bytes }),
@@ -419,12 +442,14 @@ impl<L: Layout> From<Either<SmallBytes<L>, ArcBytes<L>>> for SmallArcBytes<L> {
 }
 
 impl<L: Layout> From<SmallBytes<L>> for SmallArcBytes<L> {
+    #[inline]
     fn from(value: SmallBytes<L>) -> Self {
         Either::<_, ArcBytes<L>>::Left(value).into()
     }
 }
 
 impl<L: Layout> From<ArcBytes<L>> for SmallArcBytes<L> {
+    #[inline]
     fn from(value: ArcBytes<L>) -> Self {
         Either::<SmallBytes<L>, _>::Right(value).into()
     }
@@ -434,6 +459,7 @@ impl<L: Layout> From<ArcBytes<L>> for SmallArcBytes<L> {
 pub struct SmallStr<L: Layout = Compact>(SmallBytes<L>);
 
 impl<L: Layout> SmallStr<L> {
+    #[inline]
     pub fn new(s: &str) -> Option<Self> {
         SmallBytes::new(s.as_bytes()).map(Self)
     }
@@ -441,32 +467,39 @@ impl<L: Layout> SmallStr<L> {
     /// # Safety
     ///
     /// Bytes must be valid UTF-8.
+    #[inline]
     pub const unsafe fn from_utf8_unchecked(bytes: SmallBytes<L>) -> Self {
         Self(bytes)
     }
 
+    #[inline]
     pub const fn len(&self) -> usize {
         self.0.len()
     }
 
+    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline]
     pub const fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
     }
 
+    #[inline]
     pub fn truncate(&mut self, len: usize) {
         check_char_boundary(self, len);
         self.0.truncate(len);
     }
 
+    #[inline]
     pub fn advance(&mut self, offset: usize) {
         check_char_boundary(self, offset);
         self.0.advance(offset);
     }
 
+    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         let (offset, len) = offset_len(self.len(), range);
         check_char_boundary(self, offset);
@@ -474,16 +507,19 @@ impl<L: Layout> SmallStr<L> {
         Self(self.0.subslice(offset..offset + len))
     }
 
+    #[inline]
     pub fn as_slice(&self) -> &SmallBytes<L> {
         &self.0
     }
 
+    #[inline]
     pub fn into_slice(self) -> SmallBytes<L> {
         self.0
     }
 }
 
 impl<L: Layout> Clone for SmallStr<L> {
+    #[inline]
     fn clone(&self) -> Self {
         *self
     }
@@ -494,24 +530,28 @@ impl<L: Layout> Copy for SmallStr<L> {}
 impl<L: Layout> Deref for SmallStr<L> {
     type Target = str;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_str()
     }
 }
 
 impl<L: Layout> AsRef<str> for SmallStr<L> {
+    #[inline]
     fn as_ref(&self) -> &str {
         self
     }
 }
 
 impl<L: Layout> AsRef<[u8]> for SmallStr<L> {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
     }
 }
 
 impl<L: Layout> Hash for SmallStr<L> {
+    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -521,12 +561,14 @@ impl<L: Layout> Hash for SmallStr<L> {
 }
 
 impl<L: Layout> Borrow<str> for SmallStr<L> {
+    #[inline]
     fn borrow(&self) -> &str {
         self
     }
 }
 
 impl<L: Layout> Default for SmallStr<L> {
+    #[inline]
     fn default() -> Self {
         Self::new("").unwrap()
     }
@@ -572,6 +614,7 @@ impl<L: Layout> SmallArcStr<L> {
         unsafe { Self::from_utf8_unchecked(SmallArcBytes::new(StringBufWrapper(buffer))) }
     }
 
+    #[inline]
     pub fn from_utf8(bytes: SmallArcBytes<L>) -> Result<Self, FromUtf8Error<SmallArcBytes<L>>> {
         match core::str::from_utf8(bytes.as_slice()) {
             Ok(_) => Ok(Self(bytes)),
@@ -582,6 +625,7 @@ impl<L: Layout> SmallArcStr<L> {
     /// # Safety
     ///
     /// Bytes must be valid UTF-8.
+    #[inline]
     pub const unsafe fn from_utf8_unchecked(bytes: SmallArcBytes<L>) -> Self {
         Self(bytes)
     }
@@ -635,6 +679,7 @@ impl<L: Layout> SmallArcStr<L> {
         unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
     }
 
+    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         Self(self.0.subslice(range))
     }
@@ -650,24 +695,28 @@ impl<L: Layout> Clone for SmallArcStr<L> {
 impl<L: Layout> Deref for SmallArcStr<L> {
     type Target = str;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_str()
     }
 }
 
 impl<L: Layout> AsRef<str> for SmallArcStr<L> {
+    #[inline]
     fn as_ref(&self) -> &str {
         self
     }
 }
 
 impl<L: Layout> AsRef<[u8]> for SmallArcStr<L> {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
     }
 }
 
 impl<L: Layout> Hash for SmallArcStr<L> {
+    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -677,6 +726,7 @@ impl<L: Layout> Hash for SmallArcStr<L> {
 }
 
 impl<L: Layout> Borrow<str> for SmallArcStr<L> {
+    #[inline]
     fn borrow(&self) -> &str {
         self
     }
@@ -684,6 +734,7 @@ impl<L: Layout> Borrow<str> for SmallArcStr<L> {
 
 #[cfg(not(all(loom, test)))]
 impl<L: Layout> Default for SmallArcStr<L> {
+    #[inline]
     fn default() -> Self {
         ArcStr::new_static("").into()
     }
@@ -725,6 +776,7 @@ macro_rules! std_impl {
     ($($ty:ty),*) => {$(
         impl<L: Layout> From<$ty> for SmallArcStr<L> {
 
+            #[inline]
             fn from(value: $ty) -> Self {
                 Self::new(value)
             }
@@ -741,12 +793,14 @@ std_impl!(
 impl<L: Layout> FromStr for SmallArcStr<L> {
     type Err = Infallible;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(SmallArcBytes::from_slice(s.as_bytes())))
     }
 }
 
 impl<L: Layout> From<Either<SmallStr<L>, ArcStr<L>>> for SmallArcStr<L> {
+    #[inline]
     fn from(value: Either<SmallStr<L>, ArcStr<L>>) -> Self {
         Self(match value {
             Either::Left(bytes) => bytes.into_slice().into(),
@@ -756,12 +810,14 @@ impl<L: Layout> From<Either<SmallStr<L>, ArcStr<L>>> for SmallArcStr<L> {
 }
 
 impl<L: Layout> From<SmallStr<L>> for SmallArcStr<L> {
+    #[inline]
     fn from(value: SmallStr<L>) -> Self {
         Either::<_, ArcStr<L>>::Left(value).into()
     }
 }
 
 impl<L: Layout> From<ArcStr<L>> for SmallArcStr<L> {
+    #[inline]
     fn from(value: ArcStr<L>) -> Self {
         Either::<SmallStr<L>, _>::Right(value).into()
     }

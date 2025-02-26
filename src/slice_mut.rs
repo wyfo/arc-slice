@@ -46,10 +46,12 @@ enum Inner<T> {
 impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     const TAIL_FLAG: usize = if mem::needs_drop::<T>() { 0b10 } else { 0 };
 
+    #[inline]
     pub fn new<B: BufferMut<T>>(buffer: B) -> Self {
         Self::new_with_metadata(buffer, ())
     }
 
+    #[inline]
     pub fn new_with_metadata<B: BufferMut<T>, M: Send + Sync + 'static>(
         mut buffer: B,
         metadata: M,
@@ -152,22 +154,27 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         }
     }
 
+    #[inline]
     pub const fn len(&self) -> usize {
         self.length
     }
 
+    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline]
     pub const fn as_slice(&self) -> &[T] {
         unsafe { slice::from_raw_parts(self.start.as_ptr(), self.length) }
     }
 
+    #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.start.as_ptr(), self.length) }
     }
 
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -175,6 +182,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     /// # Safety
     ///
     /// No uninitialized memory shall be written in the returned slice.
+    #[inline]
     pub unsafe fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<T>] {
         unsafe {
             slice::from_raw_parts_mut(
@@ -187,6 +195,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     /// # Safety
     ///
     /// First `len` items of the slice must be initialized.
+    #[inline]
     pub unsafe fn set_len(&mut self, new_len: usize) {
         self.length = new_len;
     }
@@ -204,6 +213,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         });
     }
 
+    #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len >= self.length {
             return;
@@ -227,6 +237,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.length = len;
     }
 
+    #[inline]
     pub fn advance(&mut self, offset: usize) {
         if offset > self.length {
             panic_out_of_range();
@@ -258,6 +269,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         unsafe { ptr::read(self) }
     }
 
+    #[inline]
     #[must_use = "consider `ArcSliceMut::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
         if at > self.capacity {
@@ -277,6 +289,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         clone
     }
 
+    #[inline]
     #[must_use = "consider `ArcSliceMut::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {
         if at > self.length {
@@ -292,6 +305,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         clone
     }
 
+    #[inline]
     pub fn try_unsplit(&mut self, other: ArcSliceMut<T>) -> Result<(), ArcSliceMut<T>> {
         let end = unsafe { non_null_add(self.start, self.length) };
         let mut other_arc_or_offset = non_null_addr(other.arc_or_offset).get();
@@ -312,6 +326,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         Err(other)
     }
 
+    #[inline]
     pub fn freeze<L: Layout>(self) -> ArcSlice<T, L> {
         let this = ManuallyDrop::new(self);
         match this.inner() {
@@ -335,6 +350,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         vec
     }
 
+    #[inline]
     pub fn into_vec(self) -> Vec<T>
     where
         T: Clone,
@@ -355,6 +371,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         }
     }
 
+    #[inline]
     pub fn get_metadata<M: Any>(&self) -> Option<&M> {
         match self.inner() {
             Inner::Arc { arc, .. } => arc.get_metadata(),
@@ -363,6 +380,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         }
     }
 
+    #[inline]
     pub fn downcast_buffer<B: BufferMut<T>>(self) -> Result<B, Self> {
         let mut buffer = MaybeUninit::<B>::uninit();
         match self.inner() {
@@ -424,6 +442,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         Ok(())
     }
 
+    #[inline]
     pub fn try_reclaim(&mut self, additional: usize) -> bool {
         if additional < self.spare_capacity() {
             return true;
@@ -431,6 +450,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.try_reserve_inner(additional, false).is_ok()
     }
 
+    #[inline]
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         if additional <= self.spare_capacity() {
             return Ok(());
@@ -438,6 +458,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.try_reserve_inner(additional, true)
     }
 
+    #[inline]
     pub fn try_extend_from_slice(&mut self, slice: &[T]) -> Result<(), TryReserveError> {
         self.try_reserve(slice.len())?;
         unsafe {
@@ -453,6 +474,7 @@ unsafe impl<T: Send + Sync + 'static> Send for ArcSliceMut<T> {}
 unsafe impl<T: Send + Sync + 'static> Sync for ArcSliceMut<T> {}
 
 impl<T: Send + Sync + 'static> Drop for ArcSliceMut<T> {
+    #[inline]
     fn drop(&mut self) {
         match self.inner() {
             Inner::Vec { offset } => drop(unsafe { self.rebuild_vec(offset) }),
@@ -467,42 +489,49 @@ impl<T: Send + Sync + 'static> Drop for ArcSliceMut<T> {
 impl<T: Send + Sync + 'static> Deref for ArcSliceMut<T> {
     type Target = [T];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_slice()
     }
 }
 
 impl<T: Send + Sync + 'static> DerefMut for ArcSliceMut<T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut_slice()
     }
 }
 
 impl<T: Send + Sync + 'static> AsRef<[T]> for ArcSliceMut<T> {
+    #[inline]
     fn as_ref(&self) -> &[T] {
         self
     }
 }
 
 impl<T: Send + Sync + 'static> AsMut<[T]> for ArcSliceMut<T> {
+    #[inline]
     fn as_mut(&mut self) -> &mut [T] {
         self
     }
 }
 
 impl<T: Send + Sync + 'static> Borrow<[T]> for ArcSliceMut<T> {
+    #[inline]
     fn borrow(&self) -> &[T] {
         self
     }
 }
 
 impl<T: Send + Sync + 'static> BorrowMut<[T]> for ArcSliceMut<T> {
+    #[inline]
     fn borrow_mut(&mut self) -> &mut [T] {
         self
     }
 }
 
 impl<T: Send + Sync + 'static> Default for ArcSliceMut<T> {
+    #[inline]
     fn default() -> Self {
         Self::new_vec(Vec::new())
     }
@@ -604,8 +633,23 @@ where
 }
 
 impl<T: Send + Sync + 'static> From<Vec<T>> for ArcSliceMut<T> {
+    #[inline]
     fn from(value: Vec<T>) -> Self {
         Self::new(value)
+    }
+}
+
+impl<T: Send + Sync + 'static, const N: usize> From<[T; N]> for ArcSliceMut<T> {
+    #[inline]
+    fn from(value: [T; N]) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> From<ArcSliceMut<T>> for Vec<T> {
+    #[inline]
+    fn from(value: ArcSliceMut<T>) -> Self {
+        value.into_vec()
     }
 }
 
