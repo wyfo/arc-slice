@@ -51,13 +51,22 @@ pub struct ArcStr<L: Layout = Compact>(ArcBytes<L>);
 impl<L: Layout> ArcStr<L> {
     #[inline]
     pub fn new<B: StringBuffer>(buffer: B) -> Self {
-        unsafe { Self::from_utf8_unchecked(ArcBytes::new(StringBufWrapper(buffer))) }
+        Self::new_with_metadata(buffer, ())
     }
 
     #[cfg(not(all(loom, test)))]
     #[inline]
     pub const fn new_static(s: &'static str) -> Self {
         unsafe { Self::from_utf8_unchecked(ArcBytes::new_static(s.as_bytes())) }
+    }
+
+    #[inline]
+    pub fn new_with_metadata<B: StringBuffer, M: Send + Sync + 'static>(
+        buffer: B,
+        metadata: M,
+    ) -> Self {
+        let buffer = StringBufWrapper(buffer);
+        unsafe { Self::from_utf8_unchecked(ArcBytes::new_with_metadata(buffer, metadata)) }
     }
 
     #[inline]

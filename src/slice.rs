@@ -103,8 +103,8 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[inline]
-    pub fn new_with_metadata<M: Send + Sync + 'static>(
-        mut buffer: impl Buffer<T>,
+    pub fn new_with_metadata<B: Buffer<T>, M: Send + Sync + 'static>(
+        mut buffer: B,
         metadata: M,
     ) -> Self {
         if is!(M, ()) {
