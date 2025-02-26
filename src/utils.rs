@@ -1,12 +1,9 @@
-use alloc::vec::Vec;
 use core::{
-    fmt, mem,
+    fmt,
     ops::{Bound, RangeBounds},
-    ptr,
-    ptr::NonNull,
 };
 
-use crate::{macros::is, rust_compat::sub_ptr};
+use crate::macros::is;
 
 pub(crate) fn transmute_slice<T: 'static, U: 'static>(slice: &[T]) -> Option<&[U]> {
     is!(T, U).then(|| unsafe { slice.align_to().1 })
@@ -101,17 +98,4 @@ fn panic_invalid_range() -> ! {
 #[cold]
 pub(crate) fn panic_out_of_range() -> ! {
     panic!("out of range")
-}
-
-pub(crate) unsafe fn shrink_vec<T>(mut vec: Vec<T>, start: NonNull<T>, len: usize) -> Vec<T> {
-    if len != vec.len() {
-        if mem::needs_drop::<T>() {
-            vec.drain(..unsafe { sub_ptr(start.as_ptr(), vec.as_ptr()) });
-            vec.truncate(len);
-        } else {
-            unsafe { ptr::copy(start.as_ptr(), vec.as_mut_ptr(), len) };
-            unsafe { vec.set_len(len) };
-        }
-    }
-    vec
 }

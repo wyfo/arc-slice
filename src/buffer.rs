@@ -224,11 +224,7 @@ const _: () = {
 };
 
 pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
-    // from `BytesMut::reserve_inner`
-    unsafe fn try_reclaim(&mut self, offset: usize, length: usize, additional: usize) -> bool {
-        if self.capacity() - length < additional || offset < length {
-            return false;
-        }
+    unsafe fn shift_left(&mut self, offset: usize, length: usize) -> bool {
         let prev_len = self.len();
         if !unsafe { self.set_len(length) } {
             return false;
@@ -245,27 +241,21 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
                 }
             }
         }
-        unsafe { ptr::copy_nonoverlapping(buffer_ptr.add(offset), buffer_ptr, length) };
-        true
-    }
-
-    unsafe fn truncate(&mut self, length: usize) -> bool {
-        let prev_len = self.len();
-        if !unsafe { self.set_len(length) } {
-            return false;
-        }
-        if mem::needs_drop::<T>() && prev_len > length {
-            unsafe {
-                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
-                    self.as_mut_ptr().as_ptr().add(length),
-                    prev_len - length,
-                ));
-            }
+        if offset >= length {
+            unsafe { ptr::copy_nonoverlapping(buffer_ptr.add(offset), buffer_ptr, length) };
+        } else {
+            unsafe { ptr::copy(buffer_ptr.add(offset), buffer_ptr, length) };
         }
         true
     }
 
-    unsafe fn try_reserve_impl(
+    unsafe fn try_reclaim(&mut self, offset: usize, length: usize, additional: usize) -> bool {
+        self.capacity() - length >= additional
+            && offset >= length
+            && unsafe { self.shift_left(offset, length) }
+    }
+
+    unsafe fn try_reclaim_or_reserve(
         &mut self,
         offset: usize,
         length: usize,
@@ -276,10 +266,14 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
         if capacity - offset - length >= additional {
             return Ok(offset);
         }
-        if unsafe { self.try_reclaim(offset, length, additional) } {
+        // conditions from `BytesMut::reserve_inner`
+        if self.capacity() - length >= additional
+            && offset >= length
+            && unsafe { self.shift_left(offset, length) }
+        {
             return Ok(0);
         }
-        if !allocate || !unsafe { self.truncate(offset + length) } {
+        if !allocate || !unsafe { self.shift_left(0, offset + length) } {
             return Err(TryReserveError::Unsupported);
         }
         self.try_reserve(additional)?;

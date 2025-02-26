@@ -14,17 +14,17 @@ use core::{
 
 use crate::{
     arc::{unit_metadata, Arc},
-    buffer::Buffer,
+    buffer::{Buffer, BufferMutExt},
     layout::{Compact, Layout, Plain},
     loom::{
         atomic_ptr_with_mut,
         sync::atomic::{AtomicPtr, Ordering},
     },
     macros::is,
-    rust_compat::{non_null_add, non_null_sub_ptr, ptr_addr, without_provenance_mut},
+    rust_compat::{non_null_add, non_null_sub_ptr, ptr_addr, sub_ptr, without_provenance_mut},
     utils::{
         debug_slice, offset_len, offset_len_subslice, offset_len_subslice_unchecked,
-        panic_out_of_range, shrink_vec,
+        panic_out_of_range,
     },
     ArcSliceMut,
 };
@@ -125,8 +125,12 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             return Self::new_static(&[]);
         }
         let Some(base) = L::get_base(&mut vec) else {
-            let (arc, start, length) = Arc::new(vec, (), 1);
-            return unsafe { Self::from_arc(arc, start, length) };
+            #[cold]
+            fn alloc<T: Send + Sync + 'static, L: Layout>(vec: Vec<T>) -> ArcSlice<T, L> {
+                let (arc, start, length) = Arc::new(vec, (), 1);
+                unsafe { ArcSlice::from_arc(arc, start, length) }
+            }
+            return alloc(vec);
         };
         let mut vec = ManuallyDrop::new(vec);
         let arc_or_capa = without_provenance_mut::<()>(VEC_FLAG | (vec.capacity() << 1));
@@ -180,8 +184,12 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         unsafe { Vec::from_raw_parts(ptr, len, capacity.get()) }
     }
 
-    unsafe fn shrink_vec(&self, vec: Vec<T>) -> Vec<T> {
-        unsafe { shrink_vec(vec, self.start, self.length) }
+    unsafe fn shift_vec(&self, mut vec: Vec<T>) -> Vec<T> {
+        unsafe {
+            let offset = sub_ptr(self.start.as_ptr(), vec.as_mut_ptr());
+            vec.shift_left(offset, self.length)
+        };
+        vec
     }
 
     #[inline(always)]
@@ -355,7 +363,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         let mut this = ManuallyDrop::new(self);
         match this.inner_mut() {
             Inner::Static => this.as_slice().to_vec(),
-            Inner::Vec { capacity } => unsafe { this.shrink_vec(this.rebuild_vec(capacity)) },
+            Inner::Vec { capacity } => unsafe { this.shift_vec(this.rebuild_vec(capacity)) },
             Inner::Arc(mut arc) => unsafe {
                 let mut vec = MaybeUninit::<Vec<T>>::uninit();
                 if !arc.take_buffer(this.length, NonNull::new(vec.as_mut_ptr()).unwrap()) {
@@ -363,7 +371,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
                     drop(ManuallyDrop::into_inner(arc));
                     return vec;
                 }
-                this.shrink_vec(vec.assume_init())
+                this.shift_vec(vec.assume_init())
             },
         }
     }
@@ -396,7 +404,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             },
             Inner::Vec { capacity } if is!(B, Vec<T>) => unsafe {
                 let vec_ptr = buffer.as_mut_ptr().cast::<Vec<T>>();
-                vec_ptr.write(self.shrink_vec(self.rebuild_vec(capacity)));
+                vec_ptr.write(self.shift_vec(self.rebuild_vec(capacity)));
             },
             Inner::Arc(mut arc) => unsafe {
                 if !arc.take_buffer(self.length, NonNull::from(&mut buffer).cast::<B>()) {
@@ -404,7 +412,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
                 }
                 if is!(B, Vec<T>) {
                     let vec_ptr = buffer.as_mut_ptr().cast::<Vec<T>>();
-                    vec_ptr.write(self.shrink_vec(vec_ptr.read()));
+                    vec_ptr.write(self.shift_vec(vec_ptr.read()));
                 }
             },
             _ => return Err(self),

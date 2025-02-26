@@ -163,7 +163,7 @@ impl VTable {
         let buffer = &mut inner.buffer;
         let offset = unsafe { non_null_sub_ptr(start.cast(), buffer.as_mut_ptr()) };
         unsafe {
-            match buffer.try_reserve_impl(offset, length, additional, allocate) {
+            match buffer.try_reclaim_or_reserve(offset, length, additional, allocate) {
                 Ok(offset) => (
                     Ok(buffer.capacity() - offset),
                     non_null_add(buffer.as_mut_ptr(), offset).cast(),
@@ -468,7 +468,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
                 let offset = unsafe { non_null_sub_ptr(start, base) };
                 let mut vec =
                     ManuallyDrop::new(unsafe { Vec::from_raw_parts(base.as_ptr(), 0, capacity) });
-                match unsafe { vec.try_reserve_impl(offset, length, additional, allocate) } {
+                match unsafe { vec.try_reclaim_or_reserve(offset, length, additional, allocate) } {
                     Ok(offset) => {
                         let base = BufferMut::as_mut_ptr(&mut *vec);
                         let inner =

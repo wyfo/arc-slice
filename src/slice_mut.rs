@@ -16,9 +16,10 @@ use crate::{
     layout::Layout,
     macros::is,
     rust_compat::{
-        non_null_add, non_null_addr, non_null_map_addr, non_null_with_addr, without_provenance_mut,
+        non_null_add, non_null_addr, non_null_map_addr, non_null_with_addr, sub_ptr,
+        without_provenance_mut,
     },
-    utils::{debug_slice, panic_out_of_range, shrink_vec},
+    utils::{debug_slice, panic_out_of_range},
     ArcSlice,
 };
 
@@ -326,8 +327,12 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         }
     }
 
-    unsafe fn shrink_vec(&self, vec: Vec<T>) -> Vec<T> {
-        unsafe { shrink_vec(vec, self.start, self.length) }
+    unsafe fn shift_vec(&self, mut vec: Vec<T>) -> Vec<T> {
+        unsafe {
+            let offset = sub_ptr(self.start.as_ptr(), vec.as_mut_ptr());
+            vec.shift_left(offset, self.length)
+        };
+        vec
     }
 
     pub fn into_vec(self) -> Vec<T>
@@ -336,7 +341,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     {
         let this = ManuallyDrop::new(self);
         match this.inner() {
-            Inner::Vec { offset } => unsafe { this.shrink_vec(this.rebuild_vec(offset)) },
+            Inner::Vec { offset } => unsafe { this.shift_vec(this.rebuild_vec(offset)) },
             Inner::Arc { mut arc, is_tail } => unsafe {
                 this.update_arc_spare_capacity(&arc, is_tail);
                 let mut vec = MaybeUninit::<Vec<T>>::uninit();
@@ -345,7 +350,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
                     drop(ManuallyDrop::into_inner(arc));
                     return vec;
                 }
-                this.shrink_vec(vec.assume_init())
+                this.shift_vec(vec.assume_init())
             },
         }
     }
@@ -363,7 +368,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         match self.inner() {
             Inner::Vec { offset } if is!(B, Vec<T>) => unsafe {
                 let vec_ptr = buffer.as_mut_ptr().cast::<Vec<T>>();
-                vec_ptr.write(self.shrink_vec(self.rebuild_vec(offset)));
+                vec_ptr.write(self.shift_vec(self.rebuild_vec(offset)));
             },
             Inner::Arc { mut arc, is_tail } => unsafe {
                 self.update_arc_spare_capacity(&arc, is_tail);
@@ -372,7 +377,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
                 }
                 if is!(B, Vec<T>) {
                     let vec_ptr = buffer.as_mut_ptr().cast::<Vec<T>>();
-                    vec_ptr.write(self.shrink_vec(vec_ptr.read()));
+                    vec_ptr.write(self.shift_vec(vec_ptr.read()));
                 }
             },
             _ => return Err(self),
@@ -390,6 +395,8 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         match self.inner() {
             Inner::Vec { offset } => {
                 let mut vec = unsafe { ManuallyDrop::new(self.rebuild_vec(offset)) };
+                // `BufferMutExt::try_reclaim_or_reserve` could be used directly,
+                // but it would lead to extra work for nothing.
                 if unsafe { vec.try_reclaim(offset, self.length, additional) } {
                     self.set_offset(0);
                     self.start = NonNull::new(vec.as_mut_ptr()).unwrap();
