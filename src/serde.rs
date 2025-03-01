@@ -1,5 +1,5 @@
 use alloc::{string::String, vec::Vec};
-use core::{any::TypeId, cmp, fmt, marker::PhantomData, mem};
+use core::{cmp, fmt, marker::PhantomData, mem};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -58,11 +58,7 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From
     type Value = S;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        if TypeId::of::<T>() == TypeId::of::<u8>() {
-            write!(formatter, "bytes")
-        } else {
-            write!(formatter, "sequence")
-        }
+        formatter.write_str(if is!(T, u8) { "bytes" } else { "sequence" })
     }
 
     fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
