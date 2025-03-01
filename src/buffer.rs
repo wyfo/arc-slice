@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, boxed::Box, string::String, sync::Arc, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
 use core::{fmt, mem, ptr, ptr::NonNull};
 
 pub trait Buffer<T>: Send + 'static {
@@ -129,7 +129,8 @@ impl<T: Clone + Send + Sync + 'static> Buffer<T> for Cow<'static, [T]> {
     }
 }
 
-impl<T: Send + Sync + 'static> Buffer<T> for Arc<[T]> {
+#[cfg(not(feature = "portable-atomic"))]
+impl<T: Send + Sync + 'static> Buffer<T> for alloc::sync::Arc<[T]> {
     #[inline]
     fn as_slice(&self) -> &[T] {
         self

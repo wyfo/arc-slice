@@ -1,5 +1,14 @@
 #[cfg(not(all(loom, test)))]
+#[cfg(not(feature = "portable-atomic"))]
 pub(crate) use core::sync;
+
+#[cfg(not(all(loom, test)))]
+#[cfg(feature = "portable-atomic")]
+pub(crate) mod sync {
+    pub(crate) mod atomic {
+        pub(crate) use portable_atomic::*;
+    }
+}
 
 #[cfg(not(all(loom, test)))]
 pub(crate) fn atomic_ptr_with_mut<T, R>(
