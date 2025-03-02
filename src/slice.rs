@@ -4,7 +4,7 @@ use core::{
     borrow::Borrow,
     cmp, fmt,
     hash::{Hash, Hasher},
-    mem,
+    hint, mem,
     mem::{ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::{Deref, RangeBounds},
@@ -460,7 +460,18 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[cold]
-    fn clone_vec(&self, arc_or_capa: *mut (), capacity: NonZeroUsize) -> Self {
+    unsafe fn drop_vec(&mut self) {
+        let Inner::Vec { capacity } = self.inner_mut() else {
+            unsafe { hint::unreachable_unchecked() }
+        };
+        drop(unsafe { self.rebuild_vec(capacity) });
+    }
+
+    #[cold]
+    unsafe fn clone_vec(&self, arc_or_capa: *mut ()) -> Self {
+        let Inner::Vec { capacity } = self.inner(arc_or_capa) else {
+            unsafe { hint::unreachable_unchecked() }
+        };
         let vec = unsafe { self.rebuild_vec(capacity) };
         let (arc, _, _) = Arc::new(vec, (), 2);
         let arc_ptr = arc.into_ptr();
@@ -492,7 +503,7 @@ impl<T: Send + Sync + 'static, L: Layout> Drop for ArcSlice<T, L> {
     fn drop(&mut self) {
         match self.inner_mut() {
             Inner::Static => {}
-            Inner::Vec { capacity } => drop(unsafe { self.rebuild_vec(capacity) }),
+            Inner::Vec { .. } => unsafe { self.drop_vec() },
             Inner::Arc(arc) => drop(ManuallyDrop::into_inner(arc)),
         }
     }
@@ -504,7 +515,7 @@ impl<T: Send + Sync + 'static, L: Layout> Clone for ArcSlice<T, L> {
         let arc_or_capa = self.arc_or_capa.load(Ordering::Acquire);
         match self.inner(arc_or_capa) {
             Inner::Static => {}
-            Inner::Vec { capacity } => return self.clone_vec(arc_or_capa, capacity),
+            Inner::Vec { .. } => return unsafe { self.clone_vec(arc_or_capa) },
             Inner::Arc(arc) => {
                 let _ = arc.clone();
             }

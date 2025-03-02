@@ -143,10 +143,7 @@ impl VTable {
             inner.buffer.as_mut_ptr(),
             inner.buffer.len(),
             inner.buffer.capacity(),
-            Arc {
-                inner: arc,
-                _phantom: PhantomData,
-            },
+            arc.into(),
         );
         unsafe { non_null_write(slice_mut_ptr.cast(), slice_mut) };
     }
@@ -237,10 +234,7 @@ impl<I> ArcGuard<I> {
     }
 
     fn into_arc<T: Send + Sync + 'static>(self) -> Arc<T> {
-        Arc {
-            inner: ManuallyDrop::new(self).0.cast(),
-            _phantom: PhantomData,
-        }
+        ManuallyDrop::new(self).0.cast().into()
     }
 }
 
@@ -253,6 +247,15 @@ impl<T> Drop for ArcGuard<T> {
 pub(crate) struct Arc<T> {
     inner: ErasedArc,
     _phantom: PhantomData<T>,
+}
+
+impl<T> From<ErasedArc> for Arc<T> {
+    fn from(value: ErasedArc) -> Self {
+        Self {
+            inner: value,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T> Arc<T> {
@@ -368,10 +371,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
     }
 
     pub(crate) unsafe fn from_ptr(ptr: NonNull<()>) -> Self {
-        Self {
-            inner: ptr.cast(),
-            _phantom: PhantomData,
-        }
+        ptr.cast().into()
     }
 
     pub(crate) fn into_ptr(self) -> NonNull<()> {
@@ -426,10 +426,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
                 Some(unsafe { slice_mut.assume_init() })
             }
             VTableOrVec::Vec { base, capacity } => {
-                let arc = Arc {
-                    inner: self.inner,
-                    _phantom: PhantomData,
-                };
+                let arc = self.inner.into();
                 Some(ArcSliceMut::from_arc(base.cast(), 0, capacity, arc))
             }
         }
@@ -498,13 +495,17 @@ impl<T> Drop for Arc<T> {
             return;
         }
         atomic::fence(Ordering::Acquire);
-        match self.vtable_or_vec() {
-            VTableOrVec::VTable(vtable) => unsafe { (vtable.dealloc)(self.inner) },
-            VTableOrVec::Vec { base, capacity } => {
-                drop(unsafe { Vec::from_raw_parts(base.cast::<T>().as_ptr(), 0, capacity) });
-                unsafe { VTable::dealloc::<(), NonNull<()>, ()>(self.inner) };
+        #[cold]
+        fn dealloc<T>(inner: ErasedArc) {
+            match ManuallyDrop::new(Arc::<T>::from(inner)).vtable_or_vec() {
+                VTableOrVec::VTable(vtable) => unsafe { (vtable.dealloc)(inner) },
+                VTableOrVec::Vec { base, capacity } => {
+                    drop(unsafe { Vec::from_raw_parts(base.cast::<T>().as_ptr(), 0, capacity) });
+                    unsafe { VTable::dealloc::<(), NonNull<()>, ()>(inner) };
+                }
             }
         }
+        dealloc::<T>(self.inner);
     }
 }
 
