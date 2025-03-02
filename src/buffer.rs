@@ -1,5 +1,5 @@
-use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
-use core::{fmt, mem, ptr, ptr::NonNull};
+use alloc::{alloc::handle_alloc_error, borrow::Cow, boxed::Box, string::String, vec::Vec};
+use core::{alloc::Layout, cmp::max, fmt, mem, ptr, ptr::NonNull};
 
 pub trait Buffer<T>: Send + 'static {
     fn as_slice(&self) -> &[T];
@@ -188,11 +188,17 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
 
     #[inline]
     fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        let overflow = self.len().saturating_add(additional) > isize::MAX as usize;
         match self.try_reserve(additional) {
             Ok(_) => Ok(()),
-            Err(_) if overflow => Err(TryReserveError::CapacityOverflow),
-            Err(_) => Err(TryReserveError::AllocError),
+            Err(_) if self.len().saturating_add(additional) > isize::MAX as usize => {
+                Err(TryReserveError::CapacityOverflow)
+            }
+            Err(_) => {
+                let new_capa = max(2 * self.capacity(), self.len() + additional);
+                Err(TryReserveError::AllocError {
+                    layout: Layout::array::<T>(new_capa).unwrap(),
+                })
+            }
         }
     }
 }
@@ -225,23 +231,40 @@ unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum TryReserveError {
-    AllocError,
+    #[non_exhaustive]
+    AllocError {
+        layout: Layout,
+    },
     CapacityOverflow,
     NotUnique,
     Unsupported,
 }
 
+impl TryReserveError {
+    pub fn handle_alloc_error(&self) {
+        match self {
+            Self::AllocError { layout, .. } => handle_alloc_error(*layout),
+            Self::CapacityOverflow => panic_capacity_overflow(),
+            _ => {}
+        }
+    }
+}
+
 impl fmt::Display for TryReserveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AllocError => write!(f, "allocation error"),
+            Self::AllocError { .. } => write!(f, "allocation error"),
             Self::CapacityOverflow => write!(f, "capacity overflow"),
             Self::NotUnique => write!(f, "not unique"),
             Self::Unsupported => write!(f, "unsupported"),
         }
     }
+}
+
+#[cold]
+fn panic_capacity_overflow() -> ! {
+    panic!("capacity overflow");
 }
 
 #[cfg(feature = "std")]

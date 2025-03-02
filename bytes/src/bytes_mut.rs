@@ -1,6 +1,5 @@
-use alloc::{alloc::handle_alloc_error, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use core::{
-    alloc::Layout,
     borrow::{Borrow, BorrowMut},
     cmp, fmt, hash,
     mem::MaybeUninit,
@@ -102,19 +101,13 @@ impl BytesMut {
     }
 
     pub fn reserve(&mut self, additional: usize) {
-        match self.0.try_reserve(additional) {
-            Ok(_) => {}
-            Err(TryReserveError::NotUnique) => {
-                #[cold]
-                fn realloc(bytes: &mut BytesMut, additional: usize) {
-                    let mut new = BytesMut::with_capacity(bytes.len() + additional);
-                    new.extend_from_slice(bytes);
-                    *bytes = new;
-                }
-                realloc(self, additional);
-            }
-            Err(err) => handle_error(err),
-        }
+        self.0.try_reserve(additional).unwrap_or_else(|err| {
+            without_alloc_error(err, || {
+                let mut new = BytesMut::with_capacity(self.len() + additional);
+                new.extend_from_slice(self);
+                *self = new;
+            })
+        });
     }
 
     pub fn try_reclaim(&mut self, additional: usize) -> bool {
@@ -122,16 +115,10 @@ impl BytesMut {
     }
 
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
-        match self.0.try_extend_from_slice(extend) {
-            Ok(_) => {}
-            Err(TryReserveError::NotUnique) => {
-                #[cold]
-                fn realloc(bytes: &mut BytesMut, extend: &[u8]) {
-                    *bytes = BytesMut([bytes.as_ref(), extend].concat().into());
-                }
-                realloc(self, extend);
-            }
-            Err(err) => handle_error(err),
+        if let Err(err) = self.0.try_extend_from_slice(extend) {
+            without_alloc_error(err, || {
+                *self = BytesMut([self.as_ref(), extend].concat().into())
+            });
         }
     }
 
@@ -627,9 +614,7 @@ impl From<Bytes> for BytesMut {
 }
 
 #[cold]
-fn handle_error(err: TryReserveError) -> ! {
-    match err {
-        TryReserveError::AllocError => handle_alloc_error(Layout::new::<()>()),
-        err => panic!("{err}"),
-    }
+fn without_alloc_error(err: TryReserveError, fallback: impl FnOnce()) {
+    err.handle_alloc_error();
+    fallback();
 }
