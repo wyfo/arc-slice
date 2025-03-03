@@ -241,32 +241,27 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         if len >= self.length {
             return;
         }
-        match (self.inner_mut(), is!(L::Base, ())) {
-            (Inner::Vec { capacity }, true) => {
-                #[cold]
-                fn truncate_alloc<T: Send + Sync + 'static, L: Layout>(
-                    this: &mut ArcSlice<T, L>,
-                    len: usize,
-                    capacity: NonZeroUsize,
-                ) {
-                    let vec = unsafe { this.rebuild_vec(capacity) };
-                    let (arc, _, _) = Arc::new(vec, (), 1);
-                    atomic_ptr_with_mut(&mut this.arc_or_capa, |ptr| {
-                        *ptr = arc.into_ptr().as_ptr();
-                    });
-                    this.length = len;
-                }
-                truncate_alloc(self, len, capacity);
-                return;
-            }
-            (Inner::Vec { .. }, false) if mem::needs_drop::<T>() => unsafe {
-                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
-                    self.start.as_ptr().add(len),
-                    self.len() - len,
-                ));
+        match self.inner_mut() {
+            Inner::Vec { .. } if is!(L::Base, ()) => return unsafe { self.truncate_vec(len) },
+            Inner::Vec { .. } if mem::needs_drop::<T>() => unsafe {
+                let end = self.start.as_ptr().add(len);
+                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(end, self.len() - len));
             },
             _ => {}
         }
+        self.length = len;
+    }
+
+    #[cold]
+    unsafe fn truncate_vec(&mut self, len: usize) {
+        let Inner::Vec { capacity } = self.inner_mut() else {
+            unsafe { hint::unreachable_unchecked() }
+        };
+        let vec = unsafe { self.rebuild_vec(capacity) };
+        let (arc, _, _) = Arc::new(vec, (), 1);
+        atomic_ptr_with_mut(&mut self.arc_or_capa, |ptr| {
+            *ptr = arc.into_ptr().as_ptr();
+        });
         self.length = len;
     }
 
