@@ -65,7 +65,7 @@ impl Drop for Metadata {
 #[test]
 fn metadata() {
     let metadata = Metadata::default();
-    let bytes = <ArcBytes>::new_with_metadata(vec![42], metadata.clone());
+    let bytes = <ArcBytes>::with_metadata(vec![42], metadata.clone());
     assert!(bytes.get_metadata::<()>().is_none());
     assert!(bytes.get_metadata::<Metadata>().is_some());
 
@@ -152,11 +152,11 @@ fn downcast_static() {
     );
 }
 
-// `new_with_metadata` with unit metadata is like `new`, so a static subslice can be downcasted
+// `with_metadata` with unit metadata is like `new`, so a static subslice can be downcasted
 // it would not be the case if unit metadata was not handled specially
 #[test]
 fn downcast_static_with_unit_metadata() {
-    let bytes = <ArcBytes>::new_with_metadata(<&'static [u8]>::from(&[0, 1, 2, 3]), ());
+    let bytes = <ArcBytes>::with_metadata(<&'static [u8]>::from(&[0, 1, 2, 3]), ());
     let subslice = bytes.subslice(..2);
     assert_eq!(subslice.downcast_buffer::<&'static [u8]>().unwrap(), [0, 1]);
 }
@@ -165,7 +165,7 @@ fn downcast_static_with_unit_metadata() {
 #[test]
 fn downcast_buffer_with_metadata() {
     let metadata = Metadata::default();
-    let bytes = <ArcBytes>::new_with_metadata(vec![42], metadata.clone());
+    let bytes = <ArcBytes>::with_metadata(vec![42], metadata.clone());
     let _ = bytes.downcast_buffer::<Vec<u8>>().unwrap();
     assert!(metadata.dropped.load(Ordering::Relaxed));
 }

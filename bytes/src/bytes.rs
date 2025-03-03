@@ -48,7 +48,7 @@ impl Bytes {
     where
         T: AsRef<[u8]> + Send + 'static,
     {
-        Self(ArcBytes::new_with_metadata(Owner(owner), OwnerMetadata))
+        Self(ArcBytes::with_metadata(Owner(owner), OwnerMetadata))
     }
 
     pub const fn len(&self) -> usize {

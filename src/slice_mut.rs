@@ -48,11 +48,11 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
 
     #[inline]
     pub fn new<B: BufferMut<T>>(buffer: B) -> Self {
-        Self::new_with_metadata(buffer, ())
+        Self::with_metadata(buffer, ())
     }
 
     #[inline]
-    pub fn new_with_metadata<B: BufferMut<T>, M: Send + Sync + 'static>(
+    pub fn with_metadata<B: BufferMut<T>, M: Send + Sync + 'static>(
         mut buffer: B,
         metadata: M,
     ) -> Self {

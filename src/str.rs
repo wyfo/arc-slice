@@ -51,7 +51,7 @@ pub struct ArcStr<L: Layout = Compact>(ArcBytes<L>);
 impl<L: Layout> ArcStr<L> {
     #[inline]
     pub fn new<B: StringBuffer>(buffer: B) -> Self {
-        Self::new_with_metadata(buffer, ())
+        Self::with_metadata(buffer, ())
     }
 
     #[cfg(not(all(loom, test)))]
@@ -61,12 +61,12 @@ impl<L: Layout> ArcStr<L> {
     }
 
     #[inline]
-    pub fn new_with_metadata<B: StringBuffer, M: Send + Sync + 'static>(
+    pub fn with_metadata<B: StringBuffer, M: Send + Sync + 'static>(
         buffer: B,
         metadata: M,
     ) -> Self {
         let buffer = StringBufWrapper(buffer);
-        unsafe { Self::from_utf8_unchecked(ArcBytes::new_with_metadata(buffer, metadata)) }
+        unsafe { Self::from_utf8_unchecked(ArcBytes::with_metadata(buffer, metadata)) }
     }
 
     #[inline]
