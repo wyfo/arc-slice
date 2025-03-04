@@ -665,6 +665,18 @@ where
     }
 }
 
+impl<T: Send + Sync + 'static> From<ArcSlice<T, Compact>> for ArcSlice<T, Plain> {
+    fn from(value: ArcSlice<T, Compact>) -> Self {
+        value.with_layout()
+    }
+}
+
+impl<T: Send + Sync + 'static> From<ArcSlice<T, Plain>> for ArcSlice<T, Compact> {
+    fn from(value: ArcSlice<T, Plain>) -> Self {
+        value.with_layout()
+    }
+}
+
 macro_rules! std_impl {
     ($($(@$N:ident)? $ty:ty $(: $bound:path)?),*) => {$(
         impl<T: $($bound +)? Send + Sync + 'static, L: Layout, $(const $N: usize,)?> From<$ty> for ArcSlice<T, L> {

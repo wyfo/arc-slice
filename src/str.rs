@@ -13,7 +13,7 @@ use core::{
 
 use crate::{
     buffer::{Buffer, StringBuffer},
-    layout::{Compact, Layout},
+    layout::{Compact, Layout, Plain},
     macros::is,
     utils::offset_len,
     ArcBytes,
@@ -320,6 +320,18 @@ where
 {
     fn eq(&self, other: &&'a O) -> bool {
         *self == **other
+    }
+}
+
+impl From<ArcStr<Compact>> for ArcStr<Plain> {
+    fn from(value: ArcStr<Compact>) -> Self {
+        value.with_layout()
+    }
+}
+
+impl From<ArcStr<Plain>> for ArcStr<Compact> {
+    fn from(value: ArcStr<Plain>) -> Self {
+        value.with_layout()
     }
 }
 
