@@ -1,5 +1,7 @@
-use alloc::{alloc::handle_alloc_error, borrow::Cow, boxed::Box, string::String, vec::Vec};
-use core::{alloc::Layout, cmp::max, fmt, mem, ptr, ptr::NonNull};
+use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
+use core::{mem, ptr, ptr::NonNull};
+
+use crate::error::TryReserveError;
 
 pub trait Buffer<T>: Send + 'static {
     fn as_slice(&self) -> &[T];
@@ -160,7 +162,7 @@ pub unsafe trait BufferMut<T>: Buffer<T> {
     /// - If `mem::needs_drop::<T>()`, then `len` must be greater or equal to [`Self::len`].
     unsafe fn set_len(&mut self, len: usize) -> bool;
 
-    fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError>;
+    fn reserve(&mut self, _additional: usize) -> bool;
 }
 
 unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
@@ -187,19 +189,9 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
     }
 
     #[inline]
-    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        match self.try_reserve(additional) {
-            Ok(_) => Ok(()),
-            Err(_) if self.len().saturating_add(additional) > isize::MAX as usize => {
-                Err(TryReserveError::CapacityOverflow)
-            }
-            Err(_) => {
-                let new_capa = max(2 * self.capacity(), self.len() + additional);
-                Err(TryReserveError::AllocError {
-                    layout: Layout::array::<T>(new_capa).unwrap(),
-                })
-            }
-        }
+    fn reserve(&mut self, additional: usize) -> bool {
+        self.reserve(additional);
+        true
     }
 }
 
@@ -225,53 +217,10 @@ unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
     }
 
     #[inline]
-    fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError> {
-        Err(TryReserveError::Unsupported)
+    fn reserve(&mut self, _additional: usize) -> bool {
+        false
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TryReserveError {
-    #[non_exhaustive]
-    AllocError {
-        layout: Layout,
-    },
-    CapacityOverflow,
-    NotUnique,
-    Unsupported,
-}
-
-impl TryReserveError {
-    pub fn handle_alloc_error(&self) {
-        match self {
-            Self::AllocError { layout, .. } => handle_alloc_error(*layout),
-            Self::CapacityOverflow => panic_capacity_overflow(),
-            _ => {}
-        }
-    }
-}
-
-impl fmt::Display for TryReserveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AllocError { .. } => write!(f, "allocation error"),
-            Self::CapacityOverflow => write!(f, "capacity overflow"),
-            Self::NotUnique => write!(f, "not unique"),
-            Self::Unsupported => write!(f, "unsupported"),
-        }
-    }
-}
-
-#[cold]
-fn panic_capacity_overflow() -> ! {
-    panic!("capacity overflow");
-}
-
-#[cfg(feature = "std")]
-const _: () = {
-    extern crate std;
-    impl std::error::Error for TryReserveError {}
-};
 
 pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
     unsafe fn shift_left(&mut self, offset: usize, length: usize) -> bool {
@@ -323,11 +272,11 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
         {
             return Ok(0);
         }
-        if !allocate || !unsafe { self.shift_left(0, offset + length) } {
-            return Err(TryReserveError::Unsupported);
+        if allocate && unsafe { self.shift_left(0, offset + length) } && self.reserve(additional) {
+            Ok(offset)
+        } else {
+            Err(TryReserveError::Unsupported)
         }
-        self.try_reserve(additional)?;
-        Ok(offset)
     }
 }
 

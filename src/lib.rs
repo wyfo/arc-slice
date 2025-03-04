@@ -5,6 +5,7 @@ mod arc;
 pub mod buffer;
 #[cfg(feature = "bytes")]
 mod bytes;
+pub mod error;
 #[cfg(feature = "inlined")]
 pub mod inlined;
 pub mod layout;

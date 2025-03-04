@@ -12,7 +12,8 @@ use core::{
 
 use crate::{
     arc::{unit_metadata, Arc},
-    buffer::{BufferMut, BufferMutExt, TryReserveError},
+    buffer::{BufferMut, BufferMutExt},
+    error::TryReserveError,
     layout::Layout,
     macros::is,
     rust_compat::{
@@ -423,7 +424,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
                 } else if !allocate {
                     return Err(TryReserveError::Unsupported);
                 }
-                BufferMut::try_reserve(&mut *vec, additional)?;
+                vec.reserve(additional);
                 let new_start = unsafe { vec.as_mut_ptr().add(offset) };
                 self.start = NonNull::new(new_start).unwrap();
                 self.capacity = vec.capacity() - offset;

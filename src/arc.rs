@@ -11,7 +11,8 @@ use core::{
 };
 
 use crate::{
-    buffer::{Buffer, BufferMut, BufferMutExt, TryReserveError},
+    buffer::{Buffer, BufferMut, BufferMutExt},
+    error::TryReserveError,
     loom::{
         atomic_usize_with_mut,
         sync::atomic::{AtomicUsize, Ordering},

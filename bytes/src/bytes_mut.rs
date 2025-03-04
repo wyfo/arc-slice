@@ -7,7 +7,7 @@ use core::{
     ptr,
 };
 
-use arc_slice::{buffer::TryReserveError, ArcBytes, ArcBytesMut};
+use arc_slice::{ArcBytes, ArcBytesMut};
 
 use crate::{buf::UninitSlice, Buf, BufMut, Bytes, TryGetError};
 
@@ -101,13 +101,11 @@ impl BytesMut {
     }
 
     pub fn reserve(&mut self, additional: usize) {
-        self.0.try_reserve(additional).unwrap_or_else(|err| {
-            without_alloc_error(err, || {
-                let mut new = BytesMut::with_capacity(self.len() + additional);
-                new.extend_from_slice(self);
-                *self = new;
-            })
-        });
+        if self.0.try_reserve(additional).is_err() {
+            let mut new = BytesMut::with_capacity(self.len() + additional);
+            new.extend_from_slice(self);
+            *self = new;
+        }
     }
 
     pub fn try_reclaim(&mut self, additional: usize) -> bool {
@@ -115,10 +113,8 @@ impl BytesMut {
     }
 
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
-        if let Err(err) = self.0.try_extend_from_slice(extend) {
-            without_alloc_error(err, || {
-                *self = BytesMut([self.as_ref(), extend].concat().into())
-            });
+        if self.0.try_extend_from_slice(extend).is_err() {
+            *self = BytesMut([self.as_ref(), extend].concat().into())
         }
     }
 
@@ -611,10 +607,4 @@ impl From<Bytes> for BytesMut {
             .try_into_mut()
             .unwrap_or_else(|bytes| ArcBytesMut::from(ArcBytes::from(bytes).into_vec()).into())
     }
-}
-
-#[cold]
-fn without_alloc_error(err: TryReserveError, fallback: impl FnOnce()) {
-    err.handle_alloc_error();
-    fallback();
 }
