@@ -69,6 +69,12 @@ impl<L: Layout> ArcStr<L> {
         unsafe { Self::from_utf8_unchecked(ArcBytes::with_metadata(buffer, metadata)) }
     }
 
+    #[allow(clippy::should_implement_trait)]
+    #[inline]
+    pub fn from_str(s: &str) -> Self {
+        unsafe { Self::from_utf8_unchecked(ArcBytes::from_slice(s.as_bytes())) }
+    }
+
     #[inline]
     pub fn from_utf8(bytes: ArcBytes<L>) -> Result<Self, FromUtf8Error<ArcBytes<L>>> {
         match core::str::from_utf8(bytes.as_slice()) {
