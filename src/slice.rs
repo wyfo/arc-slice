@@ -160,11 +160,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     where
         T: Clone,
     {
-        if slice.is_empty() {
-            Self::new_static(&[])
-        } else {
-            Self::new_vec(slice.to_vec())
-        }
+        slice.to_vec().into()
     }
 
     unsafe fn rebuild_vec(&self, capacity: NonZeroUsize) -> Vec<T> {
