@@ -5,6 +5,7 @@ use core::{
     marker::PhantomData,
     mem,
     mem::{ManuallyDrop, MaybeUninit},
+    num::NonZeroUsize,
     ptr,
     ptr::{addr_of, addr_of_mut, NonNull},
     sync::atomic,
@@ -218,7 +219,10 @@ union VTableOrCapacity {
 
 enum VTableOrVec {
     VTable(&'static VTable),
-    Vec { base: NonNull<()>, capacity: usize },
+    Vec {
+        base: NonNull<()>,
+        capacity: NonZeroUsize,
+    },
 }
 
 const VEC_FLAG: usize = 1;
@@ -264,7 +268,8 @@ impl<T> Arc<T> {
         let inner = unsafe { self.inner.as_ref() };
         unsafe {
             if inner.vtable_or_capa.capacity & VEC_FLAG != 0 {
-                let capacity = inner.vtable_or_capa.capacity >> VEC_CAPA_SHIFT;
+                let capacity = NonZeroUsize::new(inner.vtable_or_capa.capacity >> VEC_CAPA_SHIFT)
+                    .unwrap_unchecked();
                 let inner = self.inner.cast::<ArcInner<(), NonNull<()>, ()>>().as_ref();
                 let base = inner.buffer;
                 VTableOrVec::Vec { base, capacity }
@@ -406,7 +411,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
                     (vtable.take_buffer)(self.inner, TypeId::of::<B>(), len, buffer_ptr.cast())
                 },
                 VTableOrVec::Vec { base, capacity } if is!(B, Vec<T>) => unsafe {
-                    let vec = Vec::from_raw_parts(base.cast().as_ptr(), 0, capacity);
+                    let vec = Vec::from_raw_parts(base.cast().as_ptr(), 0, capacity.get());
                     non_null_write(buffer_ptr.cast::<Vec<T>>(), vec);
                     VTable::dealloc::<(), NonNull<()>, ()>(self.inner);
                     true
@@ -428,7 +433,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
             }
             VTableOrVec::Vec { base, capacity } => {
                 let arc = self.inner.into();
-                Some(ArcSliceMut::from_arc(base.cast(), 0, capacity, arc))
+                Some(ArcSliceMut::from_arc(base.cast(), 0, capacity.get(), arc))
             }
         }
     }
@@ -464,8 +469,9 @@ impl<T: Send + Sync + 'static> Arc<T> {
             VTableOrVec::Vec { base, capacity } => {
                 let base = base.cast::<T>();
                 let offset = unsafe { non_null_sub_ptr(start, base) };
-                let mut vec =
-                    ManuallyDrop::new(unsafe { Vec::from_raw_parts(base.as_ptr(), 0, capacity) });
+                let mut vec = ManuallyDrop::new(unsafe {
+                    Vec::from_raw_parts(base.as_ptr(), 0, capacity.get())
+                });
                 match unsafe { vec.try_reclaim_or_reserve(offset, length, additional, allocate) } {
                     Ok(offset) => {
                         let base = BufferMut::as_mut_ptr(&mut *vec);
@@ -501,7 +507,8 @@ impl<T> Drop for Arc<T> {
             match ManuallyDrop::new(Arc::<T>::from(inner)).vtable_or_vec() {
                 VTableOrVec::VTable(vtable) => unsafe { (vtable.dealloc)(inner) },
                 VTableOrVec::Vec { base, capacity } => {
-                    drop(unsafe { Vec::from_raw_parts(base.cast::<T>().as_ptr(), 0, capacity) });
+                    let base = base.cast::<T>();
+                    drop(unsafe { Vec::from_raw_parts(base.as_ptr(), 0, capacity.get()) });
                     unsafe { VTable::dealloc::<(), NonNull<()>, ()>(inner) };
                 }
             }

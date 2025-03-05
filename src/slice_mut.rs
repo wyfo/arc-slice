@@ -254,9 +254,11 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     #[cold]
     unsafe fn clone_vec(&mut self, offset: usize) -> Self {
         let vec = unsafe { self.rebuild_vec(offset) };
-        let (arc, _, _, _) = Arc::new_mut(vec, (), 2);
-        self.arc_or_offset = arc.into_ptr();
-        self.set_tail_flag();
+        if vec.capacity() != 0 {
+            let (arc, _, _, _) = Arc::new_mut(vec, (), 2);
+            self.arc_or_offset = arc.into_ptr();
+            self.set_tail_flag();
+        }
         unsafe { ptr::read(self) }
     }
 
