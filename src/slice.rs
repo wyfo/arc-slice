@@ -31,14 +31,16 @@ use crate::{
 
 pub trait ArcSliceLayout {
     type Base: Copy + 'static;
-    fn get_base<T>(vec: &mut Vec<T>) -> Option<Self::Base>;
+    const TRUNCATABLE: bool;
+    fn get_base<T>(full: bool, base: *mut T) -> Option<Self::Base>;
     fn base_into_ptr<T>(base: Self::Base) -> Option<NonNull<T>>;
 }
 
 impl ArcSliceLayout for Compact {
     type Base = ();
-    fn get_base<T>(vec: &mut Vec<T>) -> Option<Self::Base> {
-        (vec.capacity() == vec.len()).then_some(())
+    const TRUNCATABLE: bool = false;
+    fn get_base<T>(full: bool, _base: *mut T) -> Option<Self::Base> {
+        full.then_some(())
     }
     fn base_into_ptr<T>(_base: Self::Base) -> Option<NonNull<T>> {
         None
@@ -47,8 +49,9 @@ impl ArcSliceLayout for Compact {
 
 impl ArcSliceLayout for Plain {
     type Base = NonNull<()>;
-    fn get_base<T>(vec: &mut Vec<T>) -> Option<Self::Base> {
-        Some(NonNull::new(vec.as_mut_ptr()).unwrap().cast())
+    const TRUNCATABLE: bool = false;
+    fn get_base<T>(_full: bool, base: *mut T) -> Option<Self::Base> {
+        Some(NonNull::new(base).unwrap().cast())
     }
     fn base_into_ptr<T>(base: Self::Base) -> Option<NonNull<T>> {
         Some(base.cast())
@@ -125,7 +128,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         if vec.capacity() == 0 {
             return Self::new_static(&[]);
         }
-        let Some(base) = L::get_base(&mut vec) else {
+        let Some(base) = L::get_base(vec.len() == vec.capacity(), vec.as_mut_ptr()) else {
             #[cold]
             fn alloc<T: Send + Sync + 'static, L: Layout>(vec: Vec<T>) -> ArcSlice<T, L> {
                 let (arc, start, length) = Arc::new(vec, (), 1);
@@ -140,6 +143,41 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             base: MaybeUninit::new(base),
             start: NonNull::new(vec.as_mut_ptr()).unwrap(),
             length: vec.len(),
+        }
+    }
+
+    pub(crate) unsafe fn new_vec_with_offset(
+        start: NonNull<T>,
+        length: usize,
+        capacity: usize,
+        offset: usize,
+    ) -> Self {
+        if capacity == 0 && offset == 0 {
+            return Self::new_static(&[]);
+        }
+        let base_ptr = unsafe { start.as_ptr().sub(offset) };
+        let Some(base) = L::get_base(length == capacity, base_ptr) else {
+            #[cold]
+            fn alloc<T: Send + Sync + 'static, L: Layout>(
+                start: NonNull<T>,
+                length: usize,
+                capacity: usize,
+                offset: usize,
+            ) -> ArcSlice<T, L> {
+                let base_ptr = unsafe { start.as_ptr().sub(offset) };
+                let vec =
+                    unsafe { Vec::from_raw_parts(base_ptr, offset + length, offset + capacity) };
+                let (arc, _, _) = Arc::new(vec, (), 1);
+                unsafe { ArcSlice::from_arc(arc, start, length) }
+            }
+            return alloc(start, length, capacity, offset);
+        };
+        let arc_or_capa = without_provenance_mut::<()>(VEC_FLAG | ((offset + capacity) << 1));
+        Self {
+            arc_or_capa: AtomicPtr::new(arc_or_capa),
+            base: MaybeUninit::new(base),
+            start,
+            length,
         }
     }
 
@@ -164,19 +202,13 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     unsafe fn rebuild_vec(&self, capacity: NonZeroUsize) -> Vec<T> {
-        let (ptr, len) = match L::base_into_ptr(unsafe { self.base.assume_init() }) {
-            Some(base) => {
-                let len = unsafe { non_null_sub_ptr(self.start, base) } + self.length;
-                (base.as_ptr(), len)
-            }
-            None => {
-                let ptr = unsafe {
-                    self.start
-                        .as_ptr()
-                        .offset(self.length as isize - capacity.get() as isize)
-                };
-                (ptr, capacity.get())
-            }
+        let (ptr, len) = if let Some(base) = L::base_into_ptr(unsafe { self.base.assume_init() }) {
+            let len = unsafe { non_null_sub_ptr(self.start, base) } + self.length;
+            (base.as_ptr(), len)
+        } else {
+            let offset = capacity.get() - self.length;
+            let ptr = unsafe { self.start.as_ptr().sub(offset) };
+            (ptr, capacity.get())
         };
         unsafe { Vec::from_raw_parts(ptr, len, capacity.get()) }
     }
@@ -238,7 +270,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             return;
         }
         match self.inner_mut() {
-            Inner::Vec { .. } if is!(L::Base, ()) => return unsafe { self.truncate_vec(len) },
+            Inner::Vec { .. } if !L::TRUNCATABLE => return unsafe { self.truncate_vec(len) },
             Inner::Vec { .. } if mem::needs_drop::<T>() => unsafe {
                 let end = self.start.as_ptr().add(len);
                 ptr::drop_in_place(ptr::slice_from_raw_parts_mut(end, self.len() - len));

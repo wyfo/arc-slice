@@ -32,7 +32,7 @@ pub struct ArcSliceMut<T: Send + Sync + 'static> {
 }
 
 const VEC_FLAG: usize = 0b01;
-const VEC_CAPA_SHIFT: usize = 1;
+const VEC_OFFSET_SHIFT: usize = 1;
 
 enum Inner<T> {
     Vec {
@@ -140,7 +140,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         let arc_or_offset = non_null_addr(self.arc_or_offset).get();
         if arc_or_offset & VEC_FLAG != 0 {
             Inner::Vec {
-                offset: arc_or_offset >> VEC_CAPA_SHIFT,
+                offset: arc_or_offset >> VEC_OFFSET_SHIFT,
             }
         } else {
             let masked_ptr = non_null_map_addr(self.arc_or_offset, |addr| unsafe {
@@ -202,7 +202,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     }
 
     fn set_offset(&mut self, offset: usize) {
-        let arc_or_offset = without_provenance_mut::<()>(VEC_FLAG | (offset << VEC_CAPA_SHIFT));
+        let arc_or_offset = without_provenance_mut::<()>(VEC_FLAG | (offset << VEC_OFFSET_SHIFT));
         self.arc_or_offset = NonNull::new(arc_or_offset).unwrap();
     }
 
@@ -333,11 +333,9 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     pub fn freeze<L: Layout>(self) -> ArcSlice<T, L> {
         let this = ManuallyDrop::new(self);
         match this.inner() {
-            Inner::Vec { offset, .. } => {
-                let mut slice = ArcSlice::new(unsafe { this.rebuild_vec(offset) });
-                slice.advance(offset);
-                slice
-            }
+            Inner::Vec { offset, .. } => unsafe {
+                ArcSlice::new_vec_with_offset(this.start, this.length, this.capacity, offset)
+            },
             Inner::Arc { arc, is_tail } => {
                 this.update_arc_spare_capacity(&arc, is_tail);
                 unsafe { ArcSlice::from_arc(ManuallyDrop::into_inner(arc), this.start, this.len()) }
