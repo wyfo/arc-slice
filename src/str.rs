@@ -16,7 +16,7 @@ use crate::{
     layout::{Compact, Layout, Plain},
     macros::is,
     utils::offset_len,
-    ArcBytes,
+    ArcBytes, ArcBytesRef,
 };
 
 #[repr(transparent)]
@@ -390,6 +390,31 @@ impl<L: Layout> From<ArcStr<L>> for ArcBytes<L> {
     #[inline]
     fn from(value: ArcStr<L>) -> Self {
         value.into_slice()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ArcStrRef<'a, L: Layout = Compact>(ArcBytesRef<'a, L>);
+
+impl<L: Layout> Deref for ArcStrRef<'_, L> {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::str::from_utf8_unchecked(&self.0) }
+    }
+}
+
+impl<L: Layout> fmt::Debug for ArcStrRef<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<L: Layout> ArcStrRef<'_, L> {
+    #[inline]
+    pub fn into_arc(self) -> ArcStr<L> {
+        unsafe { ArcStr::from_utf8_unchecked(self.0.into_arc()) }
     }
 }
 

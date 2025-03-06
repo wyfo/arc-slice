@@ -22,8 +22,9 @@ mod utils;
 pub use crate::{
     slice::{ArcSlice, ArcSliceRef},
     slice_mut::ArcSliceMut,
-    str::ArcStr,
+    str::{ArcStr, ArcStrRef},
 };
 
 pub type ArcBytes<L = layout::Compact> = ArcSlice<u8, L>;
+pub type ArcBytesRef<'a, L = layout::Compact> = ArcSliceRef<'a, u8, L>;
 pub type ArcBytesMut = ArcSliceMut<u8>;
