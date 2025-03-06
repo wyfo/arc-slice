@@ -221,10 +221,10 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         }
         if mem::needs_drop::<T>() {
             match self.inner() {
-                Inner::Vec { offset } => unsafe {
+                Inner::Vec { .. } => unsafe {
                     ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
-                        self.start.as_ptr().add(offset + len),
-                        self.length - offset + len,
+                        self.start.as_ptr().add(len),
+                        self.length - len,
                     ));
                 },
                 Inner::Arc { is_tail, .. } => {
