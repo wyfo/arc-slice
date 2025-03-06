@@ -232,7 +232,7 @@ impl<L: Layout> Hash for ArcStr<L> {
     where
         H: Hasher,
     {
-        self.as_slice().hash(state);
+        self.as_str().hash(state);
     }
 }
 
@@ -260,13 +260,13 @@ impl<L: Layout> Default for ArcStr<L> {
 
 impl<L: Layout> fmt::Debug for ArcStr<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(f)
+        (**self).fmt(f)
     }
 }
 
 impl<L: Layout> fmt::Display for ArcStr<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(f)
+        (**self).fmt(f)
     }
 }
 

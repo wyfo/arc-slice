@@ -749,7 +749,7 @@ impl<T: Send + Sync + 'static, L: Layout> Deref for ArcSliceRef<'_, T, L> {
 
 impl<T: fmt::Debug + Send + Sync + 'static, L: Layout> fmt::Debug for ArcSliceRef<'_, T, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.slice.fmt(f)
+        (**self).fmt(f)
     }
 }
 

@@ -576,13 +576,13 @@ impl<L: Layout> Default for SmallStr<L> {
 
 impl<L: Layout> fmt::Debug for SmallStr<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(f)
+        (**self).fmt(f)
     }
 }
 
 impl<L: Layout> fmt::Display for SmallStr<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(f)
+        (**self).fmt(f)
     }
 }
 
@@ -742,13 +742,13 @@ impl<L: Layout> Default for SmallArcStr<L> {
 
 impl<L: Layout> fmt::Debug for SmallArcStr<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(f)
+        (**self).fmt(f)
     }
 }
 
 impl<L: Layout> fmt::Display for SmallArcStr<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(f)
+        (**self).fmt(f)
     }
 }
 
