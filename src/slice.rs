@@ -716,7 +716,14 @@ macro_rules! std_impl {
         }
     )*};
 }
-std_impl!(&'static [T], @N &'static [T; N], @N [T; N], Box<[T]>, Vec<T>, Cow<'static, [T]>: Clone);
+std_impl!(&'static [T], @N &'static [T; N], @N [T; N], Box<[T]>, Cow<'static, [T]>: Clone);
+
+// Temporary impl until the compiler regression is fixed
+impl<T: Send + Sync + 'static, L: Layout> From<Vec<T>> for ArcSlice<T, L> {
+    fn from(value: Vec<T>) -> Self {
+        Self::new_vec(value)
+    }
+}
 
 impl<T: Clone + Send + Sync + 'static, L: Layout> From<ArcSlice<T, L>> for Vec<T> {
     #[inline]

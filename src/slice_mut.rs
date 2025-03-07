@@ -636,7 +636,7 @@ where
 impl<T: Send + Sync + 'static> From<Vec<T>> for ArcSliceMut<T> {
     #[inline]
     fn from(value: Vec<T>) -> Self {
-        Self::new(value)
+        Self::new_vec(value)
     }
 }
 
