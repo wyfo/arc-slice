@@ -21,18 +21,18 @@ impl<T: AsRef<[u8]> + Send + 'static> Buffer<u8> for Owner<T> {
 struct OwnerMetadata;
 
 impl Bytes {
-    pub fn from_arc_bytes(bytes: ArcBytes) -> Self {
-        Bytes(bytes)
+    pub fn from_arc(bytes: ArcBytes) -> Self {
+        Self(bytes)
     }
 
-    pub fn into_arc_bytes(self) -> ArcBytes {
+    pub fn into_arc(self) -> ArcBytes {
         self.0
     }
 
-    pub fn as_arc_bytes(&self) -> &ArcBytes {
+    pub fn as_arc(&self) -> &ArcBytes {
         &self.0
     }
-    pub fn as_arc_bytes_mut(&mut self) -> &mut ArcBytes {
+    pub fn as_mut_arc(&mut self) -> &mut ArcBytes {
         &mut self.0
     }
 

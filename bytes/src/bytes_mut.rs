@@ -19,6 +19,21 @@ impl BytesMut {
         Self(vec.into())
     }
 
+    pub fn from_arc(bytes: ArcBytesMut) -> Self {
+        Self(bytes)
+    }
+
+    pub fn into_arc(self) -> ArcBytesMut {
+        self.0
+    }
+
+    pub fn as_arc(&self) -> &ArcBytesMut {
+        &self.0
+    }
+    pub fn as_mut_arc(&mut self) -> &mut ArcBytesMut {
+        &mut self.0
+    }
+
     pub fn with_capacity(capacity: usize) -> BytesMut {
         Self(Vec::with_capacity(capacity).into())
     }
