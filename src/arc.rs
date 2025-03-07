@@ -12,7 +12,7 @@ use core::{
 };
 
 use crate::{
-    buffer::{Buffer, BufferMut, BufferMutExt},
+    buffer::{BorrowMetadata, Buffer, BufferMut, BufferMutExt},
     error::TryReserveError,
     loom::{
         atomic_usize_with_mut,
@@ -88,6 +88,17 @@ impl VTable {
             return Some(NonNull::from(unit_metadata()));
         }
         Some(NonNull::from(&unsafe { arc.cast::<ArcInner<C, B, M>>().as_ref() }.metadata).cast())
+    }
+
+    unsafe fn get_borrowed_metadata<C, B: BorrowMetadata>(
+        arc: ErasedArc,
+        type_id: TypeId,
+    ) -> Option<NonNull<()>> {
+        if is_not!({ type_id }, B::Metadata) {
+            return None;
+        }
+        let inner = unsafe { arc.cast::<ArcInner<C, B, ()>>().as_ref() };
+        Some(NonNull::from(inner.buffer.borrow_metadata()).cast())
     }
 
     unsafe fn take_buffer<T: 'static, C, B: Any, M>(
@@ -191,6 +202,16 @@ impl VTable {
         }
     }
 
+    fn new_borrow<T: Send + Sync + 'static, B: Buffer<T> + BorrowMetadata>() -> &'static Self {
+        &Self {
+            dealloc: Self::dealloc::<(), B, ()>,
+            get_metadata: Some(Self::get_borrowed_metadata::<(), B>),
+            take_buffer: Self::take_buffer_const::<T, B, ()>,
+            into_mut: None,
+            try_reserve: None,
+        }
+    }
+
     fn new_mut<T: Send + Sync + 'static, C: 'static, B: BufferMut<T>, M: 'static>() -> &'static Self
     {
         macro_rules! vtable {
@@ -208,6 +229,17 @@ impl VTable {
             vtable!(get_metadata: Some(Self::get_metadata::<C, B, M>))
         } else {
             vtable!(get_metadata: None)
+        }
+    }
+
+    fn new_borrow_mut<T: Send + Sync + 'static, C: 'static, B: BufferMut<T> + BorrowMetadata>(
+    ) -> &'static Self {
+        &Self {
+            dealloc: Self::dealloc_mut::<T, C, B, ()>,
+            get_metadata: Some(Self::get_borrowed_metadata::<C, B>),
+            take_buffer: Self::take_buffer_mut::<T, C, B, ()>,
+            into_mut: Some(Self::into_mut::<T, C, B>),
+            try_reserve: Some(Self::try_reserve::<T, C, B>),
         }
     }
 }
@@ -295,27 +327,15 @@ impl<T: Send + Sync + 'static> Arc<T> {
         (inner.into_arc(), start, vec.len(), vec.capacity())
     }
 
-    pub(crate) fn new<B: Buffer<T>, M: Send + Sync + 'static>(
+    fn new_inner<B: Buffer<T>, M>(
+        vtable: &'static VTable,
         buffer: B,
         metadata: M,
         rc: usize,
     ) -> (Self, NonNull<T>, usize) {
-        if is!(B, Vec<T>) {
-            let Ok(vec) = buffer.try_into_vec() else {
-                unreachable!()
-            };
-            let (arc, start, len, _) = if is!(M, ()) && !mem::needs_drop::<T>() {
-                Self::new_vec(vec, rc)
-            } else {
-                Self::new_mut(vec, metadata, rc)
-            };
-            return (arc, start, len);
-        }
         let mut inner = ArcGuard::new(ArcInner {
             rc: rc.into(),
-            vtable_or_capa: VTableOrCapacity {
-                vtable: VTable::new::<T, B, M>(),
-            },
+            vtable_or_capa: VTableOrCapacity { vtable },
             spare_capacity: (),
             buffer,
             metadata,
@@ -326,7 +346,33 @@ impl<T: Send + Sync + 'static> Arc<T> {
         (inner.into_arc(), start, len)
     }
 
+    pub(crate) fn new<B: Buffer<T>, M: Send + Sync + 'static>(
+        mut buffer: B,
+        metadata: M,
+        rc: usize,
+    ) -> (Self, NonNull<T>, usize) {
+        match buffer.try_into_vec() {
+            Ok(vec) => {
+                let (arc, start, len, _) = if is!(M, ()) && !mem::needs_drop::<T>() {
+                    Self::new_vec(vec, rc)
+                } else {
+                    Self::new_mut(vec, metadata, rc)
+                };
+                return (arc, start, len);
+            }
+            Err(b) => buffer = b,
+        }
+        Self::new_inner(VTable::new::<T, B, M>(), buffer, metadata, rc)
+    }
+
+    pub(crate) fn new_borrow<B: Buffer<T> + BorrowMetadata>(
+        buffer: B,
+    ) -> (Self, NonNull<T>, usize) {
+        Self::new_inner(VTable::new_borrow::<T, B>(), buffer, (), 1)
+    }
+
     fn new_mut_inner<C: 'static, B: BufferMut<T>, M: Send + Sync + 'static>(
+        vtable: &'static VTable,
         spare_capacity: C,
         buffer: B,
         metadata: M,
@@ -334,9 +380,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
     ) -> (Self, NonNull<T>, usize, usize) {
         let mut inner = ArcGuard::new(ArcInner {
             rc: rc.into(),
-            vtable_or_capa: VTableOrCapacity {
-                vtable: VTable::new_mut::<T, C, B, M>(),
-            },
+            vtable_or_capa: VTableOrCapacity { vtable },
             spare_capacity,
             buffer,
             metadata,
@@ -353,14 +397,28 @@ impl<T: Send + Sync + 'static> Arc<T> {
         rc: usize,
     ) -> (Self, NonNull<T>, usize, usize) {
         if mem::needs_drop::<T>() {
-            Self::new_mut_inner(AtomicUsize::new(usize::MAX), buffer, metadata, rc)
+            let vtable = VTable::new_mut::<T, AtomicUsize, B, M>();
+            Self::new_mut_inner(vtable, AtomicUsize::new(usize::MAX), buffer, metadata, rc)
         } else if is!(B, Vec<T>) && is!(M, ()) {
             let Ok(vec) = buffer.try_into_vec() else {
                 unreachable!()
             };
             Self::new_vec(vec, rc)
         } else {
-            Self::new_mut_inner((), buffer, metadata, rc)
+            let vtable = VTable::new_mut::<T, (), B, M>();
+            Self::new_mut_inner(vtable, (), buffer, metadata, rc)
+        }
+    }
+
+    pub(crate) fn new_borrow_mut<B: BufferMut<T> + BorrowMetadata>(
+        buffer: B,
+    ) -> (Self, NonNull<T>, usize, usize) {
+        if mem::needs_drop::<T>() {
+            let vtable = VTable::new_borrow_mut::<T, AtomicUsize, B>();
+            Self::new_mut_inner(vtable, AtomicUsize::new(usize::MAX), buffer, (), 1)
+        } else {
+            let vtable = VTable::new_borrow_mut::<T, (), B>();
+            Self::new_mut_inner(vtable, (), buffer, (), 1)
         }
     }
 

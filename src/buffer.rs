@@ -377,3 +377,9 @@ impl StringBuffer for Cow<'static, str> {
         }
     }
 }
+
+pub trait BorrowMetadata {
+    type Metadata: ?Sized + Sync + 'static;
+
+    fn borrow_metadata(&self) -> &Self::Metadata;
+}

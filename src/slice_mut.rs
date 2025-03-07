@@ -12,7 +12,7 @@ use core::{
 
 use crate::{
     arc::{unit_metadata, Arc},
-    buffer::{BufferMut, BufferMutExt},
+    buffer::{BorrowMetadata, BufferMut, BufferMutExt},
     error::TryReserveError,
     layout::Layout,
     macros::is,
@@ -64,13 +64,18 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
             }
         }
         let (arc, start, length, capacity) = Arc::new_mut(buffer, metadata, 1);
-        Self {
-            start,
-            length,
-            capacity,
-            arc_or_offset: arc.into_ptr(),
-        }
-        .with_tail_flag()
+        Self::from_arc(start, length, capacity, arc)
+    }
+
+    /// # Safety
+    ///
+    /// Calling [`B::borrow_metadata`](BorrowMetadata::borrow_metadata) must not invalidate
+    /// the buffer slice borrow. The returned metadata must not be used to invalidate the
+    /// buffer slice.
+    #[inline]
+    pub unsafe fn with_borrowed_metadata<B: BufferMut<T> + BorrowMetadata>(buffer: B) -> Self {
+        let (arc, start, length, capacity) = Arc::new_borrow_mut(buffer);
+        Self::from_arc(start, length, capacity, arc)
     }
 
     fn set_tail_flag(&mut self) {
@@ -79,11 +84,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
                 (addr.get() | Self::TAIL_FLAG).try_into().unwrap()
             });
         }
-    }
-
-    fn with_tail_flag(mut self) -> Self {
-        self.set_tail_flag();
-        self
     }
 
     fn spare_capacity(&self) -> usize {
@@ -126,13 +126,14 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     }
 
     pub(crate) fn from_arc(start: NonNull<T>, length: usize, capacity: usize, arc: Arc<T>) -> Self {
-        Self {
+        let mut this = Self {
             start,
             length,
             capacity,
             arc_or_offset: arc.into_ptr(),
-        }
-        .with_tail_flag()
+        };
+        this.set_tail_flag();
+        this
     }
 
     #[inline(always)]
@@ -338,7 +339,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
             },
             Inner::Arc { arc, is_tail } => {
                 this.update_arc_spare_capacity(&arc, is_tail);
-                unsafe { ArcSlice::from_arc(ManuallyDrop::into_inner(arc), this.start, this.len()) }
+                unsafe { ArcSlice::from_arc(this.start, this.len(), ManuallyDrop::into_inner(arc)) }
             }
         }
     }

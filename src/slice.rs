@@ -14,7 +14,7 @@ use core::{
 
 use crate::{
     arc::{unit_metadata, Arc},
-    buffer::{Buffer, BufferMutExt},
+    buffer::{BorrowMetadata, Buffer, BufferMutExt},
     layout::{Compact, Layout, Plain},
     loom::{
         atomic_ptr_with_mut,
@@ -121,7 +121,18 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             }
         }
         let (arc, start, length) = Arc::new(buffer, metadata, 1);
-        unsafe { Self::from_arc(arc, start, length) }
+        unsafe { Self::from_arc(start, length, arc) }
+    }
+
+    /// # Safety
+    ///
+    /// Calling [`B::borrow_metadata`](BorrowMetadata::borrow_metadata) must not invalidate
+    /// the buffer slice borrow. The returned metadata must not be used to invalidate the
+    /// buffer slice.
+    #[inline]
+    pub unsafe fn with_borrowed_metadata<B: Buffer<T> + BorrowMetadata>(buffer: B) -> Self {
+        let (arc, start, length) = Arc::new_borrow(buffer);
+        unsafe { Self::from_arc(start, length, arc) }
     }
 
     fn new_vec(mut vec: Vec<T>) -> Self {
@@ -132,7 +143,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             #[cold]
             fn alloc<T: Send + Sync + 'static, L: Layout>(vec: Vec<T>) -> ArcSlice<T, L> {
                 let (arc, start, length) = Arc::new(vec, (), 1);
-                unsafe { ArcSlice::from_arc(arc, start, length) }
+                unsafe { ArcSlice::from_arc(start, length, arc) }
             }
             return alloc(vec);
         };
@@ -168,7 +179,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
                 let vec =
                     unsafe { Vec::from_raw_parts(base_ptr, offset + length, offset + capacity) };
                 let (arc, _, _) = Arc::new(vec, (), 1);
-                unsafe { ArcSlice::from_arc(arc, start, length) }
+                unsafe { ArcSlice::from_arc(start, length, arc) }
             }
             return alloc(start, length, capacity, offset);
         };
@@ -184,7 +195,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     /// # Safety
     ///
     /// `start` and `length` must represent a valid slice for the buffer contained in `arc`.
-    pub(crate) unsafe fn from_arc(arc: Arc<T>, start: NonNull<T>, length: usize) -> Self {
+    pub(crate) unsafe fn from_arc(start: NonNull<T>, length: usize, arc: Arc<T>) -> Self {
         Self {
             arc_or_capa: AtomicPtr::new(arc.into_ptr().as_ptr()),
             base: MaybeUninit::uninit(),
@@ -514,7 +525,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
                 (*ManuallyDrop::new(arc)).clone()
             }
         };
-        unsafe { Self::from_arc(arc, self.start, self.length) }
+        unsafe { Self::from_arc(self.start, self.length, arc) }
     }
 }
 

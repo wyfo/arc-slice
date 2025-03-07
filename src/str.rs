@@ -12,7 +12,7 @@ use core::{
 };
 
 use crate::{
-    buffer::{Buffer, StringBuffer},
+    buffer::{BorrowMetadata, Buffer, StringBuffer},
     layout::{Compact, Layout, Plain},
     macros::is,
     utils::offset_len,
@@ -45,6 +45,14 @@ impl<B: StringBuffer> Buffer<u8> for StringBufWrapper<B> {
     }
 }
 
+impl<B: BorrowMetadata> BorrowMetadata for StringBufWrapper<B> {
+    type Metadata = B::Metadata;
+
+    fn borrow_metadata(&self) -> &Self::Metadata {
+        self.0.borrow_metadata()
+    }
+}
+
 #[repr(transparent)]
 pub struct ArcStr<L: Layout = Compact>(ArcBytes<L>);
 
@@ -67,6 +75,17 @@ impl<L: Layout> ArcStr<L> {
     ) -> Self {
         let buffer = StringBufWrapper(buffer);
         unsafe { Self::from_utf8_unchecked(ArcBytes::with_metadata(buffer, metadata)) }
+    }
+
+    /// # Safety
+    ///
+    /// Calling [`B::borrow_metadata`](BorrowMetadata::borrow_metadata) must not invalidate
+    /// the buffer slice borrow. The returned metadata must not be used to invalidate the
+    /// buffer slice.
+    #[inline]
+    pub unsafe fn with_borrowed_metadata<B: StringBuffer + BorrowMetadata>(buffer: B) -> Self {
+        let buffer = StringBufWrapper(buffer);
+        unsafe { Self::from_utf8_unchecked(ArcBytes::with_borrowed_metadata(buffer)) }
     }
 
     #[allow(clippy::should_implement_trait)]
