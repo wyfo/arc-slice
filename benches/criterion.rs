@@ -88,7 +88,7 @@ fn subslice_and_split(c: &mut Criterion) {
 }
 
 fn subslice_and_split_black_box(c: &mut Criterion) {
-    let mut group = c.benchmark_group("subslice_and_split");
+    let mut group = c.benchmark_group("subslice_and_split_black_box");
     group.bench_function("arcslice", |b| {
         b.iter(|| {
             let mut bytes = <ArcBytes>::new(b"Hello world");

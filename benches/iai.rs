@@ -27,6 +27,19 @@ fn arcslice_100_clone() {
 #[library_benchmark]
 fn arcslice_subslice_and_split() {
     let mut bytes = <ArcBytes>::new(b"Hello world");
+    let a = bytes.subslice(0..5);
+
+    assert_eq!(a, b"Hello");
+
+    let b = bytes.split_to(6);
+
+    assert_eq!(bytes, b"world");
+    assert_eq!(b, b"Hello ");
+}
+
+#[library_benchmark]
+fn arcslice_subslice_and_split_black_box() {
+    let mut bytes = <ArcBytes>::new(b"Hello world");
     let a = black_box(&bytes).subslice(0..5);
 
     assert_eq!(black_box(&a), b"Hello");
@@ -59,6 +72,19 @@ fn bytes_100_clone() {
 #[library_benchmark]
 fn bytes_subslice_and_split() {
     let mut bytes = Bytes::from("Hello world");
+    let a = bytes.slice(0..5);
+
+    assert_eq!(a, "Hello");
+
+    let b = bytes.split_to(6);
+
+    assert_eq!(bytes, "world");
+    assert_eq!(b, "Hello ");
+}
+
+#[library_benchmark]
+fn bytes_subslice_and_split_black_box() {
+    let mut bytes = Bytes::from("Hello world");
     let a = black_box(&bytes).slice(0..5);
 
     assert_eq!(black_box(&a), "Hello");
@@ -69,6 +95,6 @@ fn bytes_subslice_and_split() {
     assert_eq!(black_box(&b), "Hello ");
 }
 
-library_benchmark_group!(name = bench_arcslice; benchmarks = arcslice_declare, arcslice_clone, arcslice_100_clone, arcslice_subslice_and_split);
-library_benchmark_group!(name = bench_bytes; benchmarks = bytes_declare, bytes_clone, bytes_100_clone, bytes_subslice_and_split);
+library_benchmark_group!(name = bench_arcslice; benchmarks = arcslice_declare, arcslice_clone, arcslice_100_clone, arcslice_subslice_and_split, arcslice_subslice_and_split_black_box);
+library_benchmark_group!(name = bench_bytes; benchmarks = bytes_declare, bytes_clone, bytes_100_clone, bytes_subslice_and_split, bytes_subslice_and_split_black_box);
 main!(library_benchmark_groups = bench_arcslice, bench_bytes);
