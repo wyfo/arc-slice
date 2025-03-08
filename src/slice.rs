@@ -322,9 +322,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
                 Inner::Arc(arc) if arc.get_metadata::<()>().is_some() => {
                     arc_or_capa = ptr::null_mut();
                 }
-                Inner::Arc(arc) => {
-                    let _ = arc.clone();
-                }
+                Inner::Arc(arc) => mem::forget((*arc).clone()),
             };
             return Self {
                 arc_or_capa: AtomicPtr::new(arc_or_capa),
@@ -550,9 +548,7 @@ impl<T: Send + Sync + 'static, L: Layout> Clone for ArcSlice<T, L> {
         match self.inner(arc_or_capa) {
             Inner::Static => {}
             Inner::Vec { .. } => return unsafe { self.clone_vec(arc_or_capa) },
-            Inner::Arc(arc) => {
-                let _ = arc.clone();
-            }
+            Inner::Arc(arc) => mem::forget((*arc).clone()),
         };
         Self {
             arc_or_capa: AtomicPtr::new(arc_or_capa),
