@@ -8,7 +8,6 @@ use core::{
     mem,
     mem::{size_of, ManuallyDrop, MaybeUninit},
     ops::{Deref, RangeBounds},
-    ptr,
     ptr::addr_of,
     slice,
     str::FromStr,
@@ -19,7 +18,7 @@ use either::Either;
 use crate::{
     buffer::{Buffer, StringBuffer},
     layout::{Compact, Layout, Plain},
-    rust_compat::{ptr_from_mut, ptr_from_ref},
+    msrv::ptr,
     str::{check_char_boundary, FromUtf8Error, StringBufWrapper},
     utils::{debug_slice, offset_len, panic_out_of_range},
     ArcBytes, ArcStr,
@@ -71,7 +70,7 @@ impl<L: Layout> SmallBytes<L> {
             offset: 0,
             tagged_length: slice.len() as u8 | INLINED_FLAG,
         };
-        let data = ptr_from_mut(&mut this.data).cast::<u8>();
+        let data = ptr::from_mut(&mut this.data).cast::<u8>();
         unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), data, slice.len()) }
         Some(this)
     }
@@ -93,7 +92,7 @@ impl<L: Layout> SmallBytes<L> {
 
     #[inline]
     pub const fn as_slice(&self) -> &[u8] {
-        let data = ptr_from_ref(&self.data).cast::<u8>();
+        let data = ptr::from_ref(&self.data).cast::<u8>();
         unsafe { slice::from_raw_parts(data.add(self.offset as usize), self.len()) }
     }
 
@@ -253,7 +252,7 @@ impl<L: Layout> SmallArcBytes<L> {
         if unsafe { SmallBytes::is_inlined(addr_of!(self.0.small)) } {
             Either::Left(unsafe { &self.0.small })
         } else {
-            Either::Right(unsafe { &*ptr_from_ref(&self.0.arc).cast() })
+            Either::Right(unsafe { &*ptr::from_ref(&self.0.arc).cast() })
         }
     }
 

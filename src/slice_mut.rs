@@ -5,21 +5,19 @@ use core::{
     cmp, fmt, mem,
     mem::{ManuallyDrop, MaybeUninit},
     ops::{Deref, DerefMut},
-    ptr,
     ptr::NonNull,
     slice,
 };
 
+#[allow(unused_imports)]
+use crate::msrv::{NonNullExt, StrictProvenance};
 use crate::{
     arc::{unit_metadata, Arc},
     buffer::{BorrowMetadata, BufferMut, BufferMutExt},
     error::TryReserveError,
     layout::Layout,
     macros::is,
-    rust_compat::{
-        non_null_add, non_null_addr, non_null_map_addr, non_null_with_addr, sub_ptr,
-        without_provenance_mut,
-    },
+    msrv::{ptr, NonZero, SubPtrExt},
     utils::{debug_slice, panic_out_of_range},
     ArcSlice,
 };
@@ -78,11 +76,12 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         Self::from_arc(start, length, capacity, arc)
     }
 
+    #[allow(clippy::incompatible_msrv)]
     fn set_tail_flag(&mut self) {
         if self.length < self.capacity {
-            self.arc_or_offset = non_null_map_addr(self.arc_or_offset, |addr| {
-                (addr.get() | Self::TAIL_FLAG).try_into().unwrap()
-            });
+            self.arc_or_offset = self
+                .arc_or_offset
+                .map_addr(|addr| NonZero::new(addr.get() | Self::TAIL_FLAG).unwrap().into());
         }
     }
 
@@ -98,7 +97,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
 
     fn new_vec(vec: Vec<T>) -> Self {
         let mut vec = ManuallyDrop::new(vec);
-        let arc_of_offset = without_provenance_mut::<()>(VEC_FLAG);
+        let arc_of_offset = ptr::without_provenance_mut::<()>(VEC_FLAG);
         Self {
             start: NonNull::new(vec.as_mut_ptr()).unwrap(),
             length: vec.len(),
@@ -120,8 +119,9 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     /// # Safety
     ///
     /// `start` and `length` must represent a valid slice for the slice buffer.
+    #[allow(clippy::incompatible_msrv)]
     pub(crate) unsafe fn set_start_len(&mut self, start: NonNull<T>, len: usize) {
-        self.start = non_null_with_addr(self.start, non_null_addr(start));
+        self.start = self.start.with_addr(start.addr());
         self.length = len;
     }
 
@@ -136,18 +136,17 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         this
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline(always)]
     fn inner(&self) -> Inner<T> {
-        let arc_or_offset = non_null_addr(self.arc_or_offset).get();
+        let arc_or_offset = self.arc_or_offset.addr().get();
         if arc_or_offset & VEC_FLAG != 0 {
             Inner::Vec {
                 offset: arc_or_offset >> VEC_OFFSET_SHIFT,
             }
         } else {
-            let masked_ptr = non_null_map_addr(self.arc_or_offset, |addr| unsafe {
-                (addr.get() & !Self::TAIL_FLAG)
-                    .try_into()
-                    .unwrap_unchecked()
+            let masked_ptr = self.arc_or_offset.map_addr(|addr| {
+                unsafe { NonZero::new_unchecked(addr.get() & !Self::TAIL_FLAG) }.into()
             });
             Inner::Arc {
                 arc: ManuallyDrop::new(unsafe { Arc::from_ptr(masked_ptr) }),
@@ -203,15 +202,15 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     }
 
     fn set_offset(&mut self, offset: usize) {
-        let arc_or_offset = without_provenance_mut::<()>(VEC_FLAG | (offset << VEC_OFFSET_SHIFT));
+        let arc_or_offset =
+            ptr::without_provenance_mut::<()>(VEC_FLAG | (offset << VEC_OFFSET_SHIFT));
         self.arc_or_offset = NonNull::new(arc_or_offset).unwrap();
     }
 
+    #[allow(clippy::incompatible_msrv)]
     fn remove_tail_flag(&mut self) {
-        self.arc_or_offset = non_null_map_addr(self.arc_or_offset, |addr| unsafe {
-            (addr.get() & !Self::TAIL_FLAG)
-                .try_into()
-                .unwrap_unchecked()
+        self.arc_or_offset = self.arc_or_offset.map_addr(|addr| {
+            unsafe { NonZero::new_unchecked(addr.get() & !Self::TAIL_FLAG) }.into()
         });
     }
 
@@ -239,6 +238,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.length = len;
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline]
     pub fn advance(&mut self, offset: usize) {
         if offset > self.length {
@@ -247,7 +247,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         if let Inner::Vec { offset: prev_off } = self.inner() {
             self.set_offset(prev_off + offset);
         }
-        self.start = unsafe { non_null_add(self.start, offset) };
+        self.start = unsafe { self.start.add(offset) };
         self.length -= offset;
         self.capacity -= offset;
     }
@@ -273,6 +273,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         unsafe { ptr::read(self) }
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSliceMut::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
@@ -280,7 +281,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
             panic_out_of_range();
         }
         let mut clone = unsafe { self.clone() };
-        clone.start = unsafe { non_null_add(clone.start, at) };
+        clone.start = unsafe { clone.start.add(at) };
         clone.capacity -= at;
         self.remove_tail_flag();
         self.capacity = at;
@@ -293,6 +294,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         clone
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSliceMut::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {
@@ -303,22 +305,23 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         clone.remove_tail_flag();
         clone.capacity = at;
         clone.length = at;
-        self.start = unsafe { non_null_add(self.start, at) };
+        self.start = unsafe { self.start.add(at) };
         self.capacity -= at;
         self.length -= at;
         clone
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline]
     pub fn try_unsplit(&mut self, other: ArcSliceMut<T>) -> Result<(), ArcSliceMut<T>> {
-        let end = unsafe { non_null_add(self.start, self.length) };
-        let mut other_arc_or_offset = non_null_addr(other.arc_or_offset).get();
+        let end = unsafe { self.start.add(self.length) };
+        let mut other_arc_or_offset = other.arc_or_offset.addr().get();
         if mem::needs_drop::<T>() {
             other_arc_or_offset &= !Self::TAIL_FLAG;
         };
         if end == other.start
             && matches!(self.inner(), Inner::Arc { .. })
-            && non_null_addr(self.arc_or_offset).get() == other_arc_or_offset
+            && self.arc_or_offset.addr().get() == other_arc_or_offset
         {
             debug_assert_eq!(self.length, self.capacity);
             // assign arc to have tail flag
@@ -344,9 +347,10 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         }
     }
 
+    #[allow(unstable_name_collisions)]
     unsafe fn shift_vec(&self, mut vec: Vec<T>) -> Vec<T> {
         unsafe {
-            let offset = sub_ptr(self.start.as_ptr(), vec.as_mut_ptr());
+            let offset = self.start.as_ptr().sub_ptr(vec.as_mut_ptr());
             vec.shift_left(offset, self.length)
         };
         vec

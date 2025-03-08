@@ -5,12 +5,12 @@ use core::{
     marker::PhantomData,
     mem,
     mem::{ManuallyDrop, MaybeUninit},
-    num::NonZeroUsize,
-    ptr,
     ptr::{addr_of, addr_of_mut, NonNull},
     sync::atomic,
 };
 
+#[allow(unused_imports)]
+use crate::msrv::NonNullExt;
 use crate::{
     buffer::{BorrowMetadata, Buffer, BufferMut, BufferMutExt},
     error::TryReserveError,
@@ -19,7 +19,7 @@ use crate::{
         sync::atomic::{AtomicUsize, Ordering},
     },
     macros::{is, is_not},
-    rust_compat::{box_into_nonnull, non_null_add, non_null_sub_ptr, non_null_write, ptr_from_mut},
+    msrv::{ptr, BoxExt, NonZero, SubPtrExt},
     ArcSliceMut,
 };
 
@@ -115,7 +115,7 @@ impl VTable {
         if is_not!(B, Vec<T>) && len != buffer_len(&mut inner.buffer) {
             return false;
         }
-        let inner_ptr = ptr_from_mut(inner);
+        let inner_ptr = ptr::from_mut(inner);
         let buffer_src = unsafe { addr_of!((*inner_ptr).buffer) };
         let buffer_dst = buffer_ptr.cast::<B>().as_ptr();
         unsafe { ptr::copy_nonoverlapping(buffer_src, buffer_dst, 1) }
@@ -145,6 +145,7 @@ impl VTable {
         unsafe { Self::take_buffer::<T, C, B, M>(arc, type_id, len, buffer_ptr, buffer_len) }
     }
 
+    #[allow(clippy::incompatible_msrv)]
     unsafe fn into_mut<T: Send + Sync + 'static, C, B: BufferMut<T>>(
         arc: ErasedArc,
         slice_mut_ptr: NonNull<()>,
@@ -158,9 +159,10 @@ impl VTable {
             inner.buffer.capacity(),
             arc.into(),
         );
-        unsafe { non_null_write(slice_mut_ptr.cast(), slice_mut) };
+        unsafe { slice_mut_ptr.cast().write(slice_mut) };
     }
 
+    #[allow(unstable_name_collisions, clippy::incompatible_msrv)]
     unsafe fn try_reserve<T: Send + Sync + 'static, C: 'static, B: BufferMut<T>>(
         arc: ErasedArc,
         additional: usize,
@@ -171,14 +173,14 @@ impl VTable {
         unsafe { Self::update_capacity::<T, C, B>(arc) };
         let inner = unsafe { arc.cast::<ArcInner<C, B, ()>>().as_mut() };
         let buffer = &mut inner.buffer;
-        let offset = unsafe { non_null_sub_ptr(start.cast(), buffer.as_mut_ptr()) };
+        let offset = unsafe { start.cast().sub_ptr(buffer.as_mut_ptr()) };
         unsafe {
             match buffer.try_reclaim_or_reserve(offset, length, additional, allocate) {
                 Ok(offset) => (
                     Ok(buffer.capacity() - offset),
-                    non_null_add(buffer.as_mut_ptr(), offset).cast(),
+                    buffer.as_mut_ptr().add(offset).cast(),
                 ),
-                Err(err) => (Err(err), non_null_add(buffer.as_mut_ptr(), offset).cast()),
+                Err(err) => (Err(err), buffer.as_mut_ptr().add(offset).cast()),
             }
         }
     }
@@ -253,7 +255,7 @@ enum VTableOrVec {
     VTable(&'static VTable),
     Vec {
         base: NonNull<()>,
-        capacity: NonZeroUsize,
+        capacity: NonZero<usize>,
     },
 }
 
@@ -263,7 +265,7 @@ const VEC_CAPA_SHIFT: usize = 1;
 struct ArcGuard<I>(NonNull<I>);
 impl<I> ArcGuard<I> {
     fn new(inner: I) -> Self {
-        Self(box_into_nonnull(Box::new(inner)))
+        Self(Box::new(inner).into_non_null())
     }
 
     fn get(&mut self) -> &mut I {
@@ -300,7 +302,7 @@ impl<T> Arc<T> {
         let inner = unsafe { self.inner.as_ref() };
         unsafe {
             if inner.vtable_or_capa.capacity & VEC_FLAG != 0 {
-                let capacity = NonZeroUsize::new(inner.vtable_or_capa.capacity >> VEC_CAPA_SHIFT)
+                let capacity = NonZero::new(inner.vtable_or_capa.capacity >> VEC_CAPA_SHIFT)
                     .unwrap_unchecked();
                 let inner = self.inner.cast::<ArcInner<(), NonNull<()>, ()>>().as_ref();
                 let base = inner.buffer;
@@ -458,6 +460,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
         unsafe { self.inner.as_ref() }.rc.load(Ordering::Relaxed) == 1
     }
 
+    #[allow(clippy::incompatible_msrv)]
     pub(crate) unsafe fn take_buffer<B: Buffer<T>>(
         &mut self,
         len: usize,
@@ -470,7 +473,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
                 },
                 VTableOrVec::Vec { base, capacity } if is!(B, Vec<T>) => unsafe {
                     let vec = Vec::from_raw_parts(base.cast().as_ptr(), 0, capacity.get());
-                    non_null_write(buffer_ptr.cast::<Vec<T>>(), vec);
+                    buffer_ptr.cast::<Vec<T>>().write(vec);
                     VTable::dealloc::<(), NonNull<()>, ()>(self.inner);
                     true
                 },
@@ -503,6 +506,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
             .store(spare_capacity, Ordering::Relaxed);
     }
 
+    #[allow(unstable_name_collisions, clippy::incompatible_msrv)]
     pub(crate) unsafe fn try_reserve(
         &mut self,
         additional: usize,
@@ -526,7 +530,7 @@ impl<T: Send + Sync + 'static> Arc<T> {
             },
             VTableOrVec::Vec { base, capacity } => {
                 let base = base.cast::<T>();
-                let offset = unsafe { non_null_sub_ptr(start, base) };
+                let offset = unsafe { start.sub_ptr(base) };
                 let mut vec = ManuallyDrop::new(unsafe {
                     Vec::from_raw_parts(base.as_ptr(), 0, capacity.get())
                 });
@@ -539,12 +543,10 @@ impl<T: Send + Sync + 'static> Arc<T> {
                             capacity: VEC_FLAG | (vec.capacity() << VEC_CAPA_SHIFT),
                         };
                         inner.buffer = base;
-                        (Ok(vec.capacity() - offset), unsafe {
-                            non_null_add(base, offset)
-                        })
+                        (Ok(vec.capacity() - offset), unsafe { base.add(offset) })
                     }
                     Err(err) => (Err(err), unsafe {
-                        non_null_add(BufferMut::as_mut_ptr(&mut *vec), offset)
+                        BufferMut::as_mut_ptr(&mut *vec).add(offset)
                     }),
                 }
             }

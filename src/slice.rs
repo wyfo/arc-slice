@@ -6,12 +6,12 @@ use core::{
     hash::{Hash, Hasher},
     hint, mem,
     mem::{ManuallyDrop, MaybeUninit},
-    num::NonZeroUsize,
     ops::{Deref, RangeBounds},
-    ptr,
     ptr::NonNull,
 };
 
+#[allow(unused_imports)]
+use crate::msrv::{NonNullExt, StrictProvenance};
 use crate::{
     arc::{unit_metadata, Arc},
     buffer::{BorrowMetadata, Buffer, BufferMutExt},
@@ -21,7 +21,7 @@ use crate::{
         sync::atomic::{AtomicPtr, Ordering},
     },
     macros::is,
-    rust_compat::{non_null_add, non_null_sub_ptr, ptr_addr, sub_ptr, without_provenance_mut},
+    msrv::{ptr, NonZero, SubPtrExt},
     utils::{
         debug_slice, offset_len, offset_len_subslice, offset_len_subslice_unchecked,
         panic_out_of_range,
@@ -74,7 +74,7 @@ const VEC_CAPA_SHIFT: usize = 1;
 
 enum Inner<T> {
     Static,
-    Vec { capacity: NonZeroUsize },
+    Vec { capacity: NonZero<usize> },
     Arc(ManuallyDrop<Arc<T>>),
 }
 
@@ -148,7 +148,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             return alloc(vec);
         };
         let mut vec = ManuallyDrop::new(vec);
-        let arc_or_capa = without_provenance_mut::<()>(VEC_FLAG | (vec.capacity() << 1));
+        let arc_or_capa = ptr::without_provenance_mut::<()>(VEC_FLAG | (vec.capacity() << 1));
         Self {
             arc_or_capa: AtomicPtr::new(arc_or_capa),
             base: MaybeUninit::new(base),
@@ -183,7 +183,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             }
             return alloc(start, length, capacity, offset);
         };
-        let arc_or_capa = without_provenance_mut::<()>(VEC_FLAG | ((offset + capacity) << 1));
+        let arc_or_capa = ptr::without_provenance_mut::<()>(VEC_FLAG | ((offset + capacity) << 1));
         Self {
             arc_or_capa: AtomicPtr::new(arc_or_capa),
             base: MaybeUninit::new(base),
@@ -212,9 +212,10 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         slice.to_vec().into()
     }
 
-    unsafe fn rebuild_vec(&self, capacity: NonZeroUsize) -> Vec<T> {
+    #[allow(unstable_name_collisions)]
+    unsafe fn rebuild_vec(&self, capacity: NonZero<usize>) -> Vec<T> {
         let (ptr, len) = if let Some(base) = L::base_into_ptr(unsafe { self.base.assume_init() }) {
-            let len = unsafe { non_null_sub_ptr(self.start, base) } + self.length;
+            let len = unsafe { self.start.sub_ptr(base) } + self.length;
             (base.as_ptr(), len)
         } else {
             let offset = capacity.get() - self.length;
@@ -224,21 +225,22 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         unsafe { Vec::from_raw_parts(ptr, len, capacity.get()) }
     }
 
+    #[allow(unstable_name_collisions)]
     unsafe fn shift_vec(&self, mut vec: Vec<T>) -> Vec<T> {
         unsafe {
-            let offset = sub_ptr(self.start.as_ptr(), vec.as_mut_ptr());
+            let offset = self.start.as_ptr().sub_ptr(vec.as_mut_ptr());
             vec.shift_left(offset, self.length)
         };
         vec
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline(always)]
     fn inner(&self, arc_or_capa: *mut ()) -> Inner<T> {
+        let capacity = arc_or_capa.addr() >> VEC_CAPA_SHIFT;
         match NonNull::new(arc_or_capa) {
-            Some(_) if ptr_addr(arc_or_capa) & VEC_FLAG != 0 => Inner::Vec {
-                capacity: unsafe {
-                    NonZeroUsize::new(ptr_addr(arc_or_capa) >> VEC_CAPA_SHIFT).unwrap_unchecked()
-                },
+            Some(_) if arc_or_capa.addr() & VEC_FLAG != 0 => Inner::Vec {
+                capacity: unsafe { NonZero::new_unchecked(capacity) },
             },
             Some(arc) => Inner::Arc(ManuallyDrop::new(unsafe { Arc::from_ptr(arc) })),
             None => Inner::Static,
@@ -304,15 +306,17 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         self.length = len;
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline]
     pub fn advance(&mut self, offset: usize) {
         if offset > self.length {
             panic_out_of_range();
         }
-        self.start = unsafe { non_null_add(self.start, offset) };
+        self.start = unsafe { self.start.add(offset) };
         self.length -= offset;
     }
 
+    #[allow(clippy::incompatible_msrv)]
     pub(crate) unsafe fn subslice_impl(&self, offset: usize, len: usize) -> Self {
         if len == 0 {
             let mut arc_or_capa = self.arc_or_capa.load(Ordering::Acquire);
@@ -327,12 +331,12 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             return Self {
                 arc_or_capa: AtomicPtr::new(arc_or_capa),
                 base: MaybeUninit::uninit(),
-                start: unsafe { non_null_add(self.start, offset) },
+                start: unsafe { self.start.add(offset) },
                 length: 0,
             };
         }
         let mut clone = self.clone();
-        clone.start = unsafe { non_null_add(self.start, offset) };
+        clone.start = unsafe { self.start.add(offset) };
         clone.length = len;
         clone
     }
@@ -349,6 +353,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         unsafe { self.subslice_impl(offset, len) }
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSlice::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
@@ -360,12 +365,13 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             panic_out_of_range();
         }
         let mut clone = self.clone();
-        clone.start = unsafe { non_null_add(clone.start, at) };
+        clone.start = unsafe { clone.start.add(at) };
         clone.length -= at;
         self.length = at;
         clone
     }
 
+    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSlice::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {
@@ -378,7 +384,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
         let mut clone = self.clone();
         clone.length = at;
-        self.start = unsafe { non_null_add(self.start, at) };
+        self.start = unsafe { self.start.add(at) };
         self.length -= at;
         clone
     }

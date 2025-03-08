@@ -11,7 +11,7 @@ pub mod inlined;
 pub mod layout;
 mod loom;
 mod macros;
-mod rust_compat;
+mod msrv;
 #[cfg(feature = "serde")]
 mod serde;
 mod slice;
