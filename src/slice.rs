@@ -319,17 +319,8 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     #[allow(clippy::incompatible_msrv)]
     pub(crate) unsafe fn subslice_impl(&self, offset: usize, len: usize) -> Self {
         if len == 0 {
-            let mut arc_or_capa = self.arc_or_capa.load(Ordering::Acquire);
-            match self.inner(arc_or_capa) {
-                Inner::Static => {}
-                Inner::Vec { .. } => arc_or_capa = ptr::null_mut(),
-                Inner::Arc(arc) if arc.get_metadata::<()>().is_some() => {
-                    arc_or_capa = ptr::null_mut();
-                }
-                Inner::Arc(arc) => mem::forget((*arc).clone()),
-            };
             return Self {
-                arc_or_capa: AtomicPtr::new(arc_or_capa),
+                arc_or_capa: AtomicPtr::new(ptr::null_mut()),
                 base: MaybeUninit::uninit(),
                 start: unsafe { self.start.add(offset) },
                 length: 0,
