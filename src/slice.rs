@@ -49,7 +49,7 @@ impl ArcSliceLayout for Compact {
 
 impl ArcSliceLayout for Plain {
     type Base = NonNull<()>;
-    const TRUNCATABLE: bool = false;
+    const TRUNCATABLE: bool = true;
     fn get_base<T>(_full: bool, base: *mut T) -> Option<Self::Base> {
         Some(NonNull::new(base).unwrap().cast())
     }
