@@ -47,7 +47,7 @@ impl BorrowMetadata for MyShmBuffer {
 let shmem = ShmemConf::new().size(8).create().unwrap();
 let os_id = shmem.get_os_id().to_owned();
 
-let bytes = unsafe { <ArcBytes>::with_borrowed_metadata(MyShmBuffer(shmem)) };
+let bytes = <ArcBytes>::with_borrowed_metadata(MyShmBuffer(shmem));
 let metadata = bytes.get_metadata::<MyShmMetadata>().unwrap();
 assert_eq!(metadata.0.get_os_id(), os_id);
 ```

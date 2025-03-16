@@ -124,13 +124,8 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         unsafe { Self::from_arc(start, length, arc) }
     }
 
-    /// # Safety
-    ///
-    /// Calling [`B::borrow_metadata`](BorrowMetadata::borrow_metadata) must not invalidate
-    /// the buffer slice borrow. The returned metadata must not be used to invalidate the
-    /// buffer slice.
     #[inline]
-    pub unsafe fn with_borrowed_metadata<B: Buffer<T> + BorrowMetadata>(buffer: B) -> Self {
+    pub fn with_borrowed_metadata<B: Buffer<T> + BorrowMetadata>(buffer: B) -> Self {
         let (arc, start, length) = Arc::new_borrow(buffer);
         unsafe { Self::from_arc(start, length, arc) }
     }

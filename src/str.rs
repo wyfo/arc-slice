@@ -77,13 +77,8 @@ impl<L: Layout> ArcStr<L> {
         unsafe { Self::from_utf8_unchecked(ArcBytes::with_metadata(buffer, metadata)) }
     }
 
-    /// # Safety
-    ///
-    /// Calling [`B::borrow_metadata`](BorrowMetadata::borrow_metadata) must not invalidate
-    /// the buffer slice borrow. The returned metadata must not be used to invalidate the
-    /// buffer slice.
     #[inline]
-    pub unsafe fn with_borrowed_metadata<B: StringBuffer + BorrowMetadata>(buffer: B) -> Self {
+    pub fn with_borrowed_metadata<B: StringBuffer + BorrowMetadata>(buffer: B) -> Self {
         let buffer = StringBufWrapper(buffer);
         unsafe { Self::from_utf8_unchecked(ArcBytes::with_borrowed_metadata(buffer)) }
     }
