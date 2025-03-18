@@ -1,6 +1,6 @@
 [package]
 name = "arc-slice"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2021"
 rust-version = "1.65.0"
 exclude = [".*"]
@@ -8,13 +8,13 @@ description = "Shared memory slices"
 homepage = "https://github.com/wyfo/arc-slice"
 readme = "README.md"
 keywords = [
-    "buffers",
-    "io",
-    "zero-copy",
+  "buffers",
+  "io",
+  "zero-copy",
 ]
 categories = [
-    "network-programming",
-    "data-structures",
+  "network-programming",
+  "data-structures",
 ]
 license = "MIT"
 repository = "https://github.com/wyfo/arc-slice"
