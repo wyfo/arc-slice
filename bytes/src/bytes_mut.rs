@@ -147,10 +147,10 @@ impl BytesMut {
         }
     }
 
-    /// # Safety
-    ///
-    /// No uninitialized memory shall be written in the returned slice.
-    pub unsafe fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+    pub fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        // SAFETY: implementation of `ArcSliceMut` allows writing uninitialized
+        // bytes to spare capacity when the underlying buffer is a `Vec`,
+        // as the buffer is then stored by raw parts
         unsafe { self.0.spare_capacity_mut() }
     }
 }
