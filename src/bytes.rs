@@ -1,4 +1,4 @@
-use crate::{layout::Layout, str::check_char_boundary, ArcSlice, ArcSliceMut, ArcStr};
+use crate::{layout::Layout, ArcSlice, ArcSliceMut, ArcStr};
 
 impl<L: Layout> bytes::Buf for ArcSlice<u8, L> {
     fn remaining(&self) -> usize {
@@ -92,6 +92,21 @@ impl<L: Layout> bytes::Buf for crate::inlined::SmallArcBytes<L> {
 }
 
 #[cfg(feature = "inlined")]
+impl<L: Layout> bytes::Buf for crate::inlined::SmallStr<L> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.advance(cnt);
+    }
+}
+
+#[cfg(feature = "inlined")]
 impl<L: Layout> bytes::Buf for crate::inlined::SmallArcStr<L> {
     fn remaining(&self) -> usize {
         self.len()
@@ -102,7 +117,6 @@ impl<L: Layout> bytes::Buf for crate::inlined::SmallArcStr<L> {
     }
 
     fn advance(&mut self, cnt: usize) {
-        check_char_boundary(self, cnt);
         match self.as_either_mut() {
             either::Either::Left(s) => s.advance(cnt),
             either::Either::Right(s) => s.advance(cnt),
