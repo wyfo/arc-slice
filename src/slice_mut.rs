@@ -2,7 +2,9 @@ use alloc::vec::Vec;
 use core::{
     any::Any,
     borrow::{Borrow, BorrowMut},
-    cmp, fmt, mem,
+    cmp, fmt,
+    hash::{Hash, Hasher},
+    mem,
     mem::{ManuallyDrop, MaybeUninit},
     ops::{Deref, DerefMut},
     ptr::NonNull,
@@ -519,6 +521,16 @@ impl<T: Send + Sync + 'static> AsMut<[T]> for ArcSliceMut<T> {
     #[inline]
     fn as_mut(&mut self) -> &mut [T] {
         self
+    }
+}
+
+impl<T: Hash + Send + Sync + 'static> Hash for ArcSliceMut<T> {
+    #[inline]
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.as_slice().hash(state);
     }
 }
 
