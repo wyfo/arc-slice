@@ -1,7 +1,7 @@
 use alloc::{string::String, vec::Vec};
 use core::{
     borrow::{Borrow, BorrowMut},
-    cmp, fmt, hash,
+    cmp, fmt,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     ptr,
@@ -11,27 +11,14 @@ use arc_slice::{ArcBytes, ArcBytesMut};
 
 use crate::{buf::UninitSlice, Buf, BufMut, Bytes, TryGetError};
 
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
+#[repr(transparent)]
 pub struct BytesMut(ArcBytesMut);
 
 impl BytesMut {
     #[cfg(feature = "serde")]
     pub(crate) fn from_vec(vec: Vec<u8>) -> Self {
         Self(vec.into())
-    }
-
-    pub fn from_arc(bytes: ArcBytesMut) -> Self {
-        Self(bytes)
-    }
-
-    pub fn into_arc(self) -> ArcBytesMut {
-        self.0
-    }
-
-    pub fn as_arc(&self) -> &ArcBytesMut {
-        &self.0
-    }
-    pub fn as_mut_arc(&mut self) -> &mut ArcBytesMut {
-        &mut self.0
     }
 
     pub fn with_capacity(capacity: usize) -> BytesMut {
@@ -277,43 +264,6 @@ impl<'a> From<&'a str> for BytesMut {
 impl From<BytesMut> for Bytes {
     fn from(src: BytesMut) -> Bytes {
         src.freeze()
-    }
-}
-
-impl PartialEq for BytesMut {
-    fn eq(&self, other: &BytesMut) -> bool {
-        self.as_ref() == other.as_ref()
-    }
-}
-
-impl PartialOrd for BytesMut {
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for BytesMut {
-    fn cmp(&self, other: &BytesMut) -> cmp::Ordering {
-        self.as_ref().cmp(other.as_ref())
-    }
-}
-
-impl Eq for BytesMut {}
-
-impl Default for BytesMut {
-    #[inline]
-    fn default() -> BytesMut {
-        BytesMut::new()
-    }
-}
-
-impl hash::Hash for BytesMut {
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: hash::Hasher,
-    {
-        let s: &[u8] = self.as_ref();
-        s.hash(state);
     }
 }
 

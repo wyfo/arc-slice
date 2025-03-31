@@ -9,7 +9,8 @@ use arc_slice::{buffer::Buffer, ArcBytes};
 
 use crate::{Buf, BytesMut};
 
-#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
+#[repr(transparent)]
 pub struct Bytes(ArcBytes);
 
 struct Owner<T>(T);
@@ -21,21 +22,6 @@ impl<T: AsRef<[u8]> + Send + 'static> Buffer<u8> for Owner<T> {
 struct OwnerMetadata;
 
 impl Bytes {
-    pub fn from_arc(bytes: ArcBytes) -> Self {
-        Self(bytes)
-    }
-
-    pub fn into_arc(self) -> ArcBytes {
-        self.0
-    }
-
-    pub fn as_arc(&self) -> &ArcBytes {
-        &self.0
-    }
-    pub fn as_mut_arc(&mut self) -> &mut ArcBytes {
-        &mut self.0
-    }
-
     pub fn new() -> Self {
         Self::default()
     }
