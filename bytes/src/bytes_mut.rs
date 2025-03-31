@@ -186,7 +186,7 @@ unsafe impl BufMut for BytesMut {
         if self.capacity() == self.len() {
             self.reserve(64);
         }
-        unsafe { self.spare_capacity_mut() }.into()
+        self.spare_capacity_mut().into()
     }
 
     fn put<T: Buf>(&mut self, mut src: T)
