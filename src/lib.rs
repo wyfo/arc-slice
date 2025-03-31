@@ -1,6 +1,8 @@
 #![no_std]
 extern crate alloc;
 
+#[doc(hidden)]
+pub mod __private;
 mod arc;
 pub mod buffer;
 #[cfg(feature = "bytes")]

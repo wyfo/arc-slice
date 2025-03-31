@@ -1,6 +1,6 @@
-use crate::{layout::Layout, ArcSlice, ArcSliceMut, ArcStr};
+use crate::{layout::Layout, ArcBytes, ArcBytesMut, ArcStr};
 
-impl<L: Layout> bytes::Buf for ArcSlice<u8, L> {
+impl<L: Layout> bytes::Buf for ArcBytes<L> {
     fn remaining(&self) -> usize {
         self.len()
     }
@@ -14,7 +14,7 @@ impl<L: Layout> bytes::Buf for ArcSlice<u8, L> {
     }
 }
 
-impl bytes::Buf for ArcSliceMut<u8> {
+impl bytes::Buf for ArcBytesMut {
     fn remaining(&self) -> usize {
         self.len()
     }
@@ -28,7 +28,7 @@ impl bytes::Buf for ArcSliceMut<u8> {
     }
 }
 
-unsafe impl bytes::BufMut for ArcSliceMut<u8> {
+unsafe impl bytes::BufMut for ArcBytesMut {
     fn remaining_mut(&self) -> usize {
         self.capacity() - self.len()
     }
@@ -80,14 +80,11 @@ impl<L: Layout> bytes::Buf for crate::inlined::SmallArcBytes<L> {
     }
 
     fn chunk(&self) -> &[u8] {
-        self
+        self.as_slice()
     }
 
     fn advance(&mut self, cnt: usize) {
-        match self.as_either_mut() {
-            either::Either::Left(bytes) => bytes.advance(cnt),
-            either::Either::Right(bytes) => bytes.advance(cnt),
-        }
+        self._advance(cnt);
     }
 }
 
@@ -117,9 +114,6 @@ impl<L: Layout> bytes::Buf for crate::inlined::SmallArcStr<L> {
     }
 
     fn advance(&mut self, cnt: usize) {
-        match self.as_either_mut() {
-            either::Either::Left(s) => s.advance(cnt),
-            either::Either::Right(s) => s.advance(cnt),
-        }
+        self._advance(cnt);
     }
 }

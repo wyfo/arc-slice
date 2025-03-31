@@ -307,6 +307,14 @@ impl<L: Layout> SmallArcBytes<L> {
             }),
         }
     }
+
+    #[doc(hidden)]
+    pub fn _advance(&mut self, cnt: usize) {
+        match self.as_either_mut() {
+            Either::Left(s) => s.advance(cnt),
+            Either::Right(s) => s.advance(cnt),
+        }
+    }
 }
 
 impl<L: Layout> Drop for SmallArcBytes<L> {
@@ -690,6 +698,14 @@ impl<L: Layout> SmallArcStr<L> {
     #[inline]
     pub fn into_slice(self) -> SmallArcBytes<L> {
         self.0
+    }
+
+    #[doc(hidden)]
+    pub fn _advance(&mut self, cnt: usize) {
+        match self.as_either_mut() {
+            Either::Left(s) => s.advance(cnt),
+            Either::Right(s) => s.advance(cnt),
+        }
     }
 }
 
