@@ -681,6 +681,16 @@ impl<L: Layout> SmallArcStr<L> {
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         Self(self.0.subslice(range))
     }
+
+    #[inline]
+    pub fn as_slice(&self) -> &SmallArcBytes<L> {
+        &self.0
+    }
+
+    #[inline]
+    pub fn into_slice(self) -> SmallArcBytes<L> {
+        self.0
+    }
 }
 
 impl<L: Layout> Clone for SmallArcStr<L> {

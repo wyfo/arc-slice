@@ -50,7 +50,7 @@ impl<L: Layout> bytes::Buf for ArcStr<L> {
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_ref()
+        self.as_slice()
     }
 
     fn advance(&mut self, cnt: usize) {
@@ -113,7 +113,7 @@ impl<L: Layout> bytes::Buf for crate::inlined::SmallArcStr<L> {
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_ref()
+        self.as_slice()
     }
 
     fn advance(&mut self, cnt: usize) {
