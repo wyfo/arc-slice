@@ -20,7 +20,7 @@ license = "MIT"
 repository = "https://github.com/wyfo/arc-slice"
 
 [features]
-default = ["std", "inlined", "bytes"]
+default = ["std"]
 inlined = ["dep:either"]
 std = []
 
