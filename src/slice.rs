@@ -58,6 +58,15 @@ impl ArcSliceLayout for Plain {
     }
 }
 
+#[cfg(not(feature = "inlined"))]
+pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = Compact> {
+    start: NonNull<T>,
+    length: usize,
+    arc_or_capa: AtomicPtr<()>,
+    base: MaybeUninit<<L as ArcSliceLayout>::Base>,
+}
+
+#[cfg(feature = "inlined")]
 #[repr(C)]
 pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = Compact> {
     #[cfg(target_endian = "big")]
