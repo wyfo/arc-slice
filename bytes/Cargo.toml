@@ -8,8 +8,9 @@ default = ["std"]
 std = ["arc-slice/std"]
 
 [dependencies]
-arc-slice = { version = "0.1.0-alpha.1", path = "..", default-features = false }
+arc-slice = { version = "0.1.0-alpha.1", path = "..", default-features = false, features = ["inlined"] }
 bytemuck = { version = "1", features = ["derive"] }
+either = "1"
 serde = { version = "1.0.60", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]

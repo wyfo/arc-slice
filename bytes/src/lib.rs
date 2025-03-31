@@ -86,3 +86,123 @@ fn panic_does_not_fit(size: usize, nbytes: usize) -> ! {
         size, nbytes
     );
 }
+
+impl<L: arc_slice::layout::Layout> Buf for arc_slice::ArcBytes<L> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.advance(cnt);
+    }
+}
+
+impl Buf for arc_slice::ArcBytesMut {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.advance(cnt);
+    }
+}
+
+unsafe impl BufMut for arc_slice::ArcBytesMut {
+    fn remaining_mut(&self) -> usize {
+        self.capacity() - self.len()
+    }
+
+    unsafe fn advance_mut(&mut self, cnt: usize) {
+        // SAFETY: same function contract
+        unsafe { self.set_len(self.len() + cnt) }
+    }
+
+    fn chunk_mut(&mut self) -> &mut buf::UninitSlice {
+        // SAFETY: `UninitSlice` prevent writing uninitialized memory
+        unsafe { self.spare_capacity_mut() }.into()
+    }
+}
+
+impl<L: arc_slice::layout::Layout> Buf for arc_slice::ArcStr<L> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.advance(cnt);
+    }
+}
+
+impl<L: arc_slice::layout::Layout> Buf for arc_slice::inlined::SmallBytes<L> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.advance(cnt);
+    }
+}
+
+impl<L: arc_slice::layout::Layout> Buf for arc_slice::inlined::SmallArcBytes<L> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        match self.as_either_mut() {
+            either::Either::Left(bytes) => bytes.advance(cnt),
+            either::Either::Right(bytes) => bytes.advance(cnt),
+        }
+    }
+}
+
+impl<L: arc_slice::layout::Layout> Buf for arc_slice::inlined::SmallStr<L> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.advance(cnt);
+    }
+}
+
+impl<L: arc_slice::layout::Layout> Buf for arc_slice::inlined::SmallArcStr<L> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_ref()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        match self.as_either_mut() {
+            either::Either::Left(s) => s.advance(cnt),
+            either::Either::Right(s) => s.advance(cnt),
+        }
+    }
+}
