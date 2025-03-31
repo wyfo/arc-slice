@@ -19,7 +19,6 @@ use crate::{
     ArcBytes, ArcBytesRef,
 };
 
-#[repr(transparent)]
 pub(crate) struct StringBufWrapper<B>(pub(crate) B);
 
 impl<B: StringBuffer> Buffer<u8> for StringBufWrapper<B> {
@@ -53,7 +52,6 @@ impl<B: BorrowMetadata> BorrowMetadata for StringBufWrapper<B> {
     }
 }
 
-#[repr(transparent)]
 pub struct ArcStr<L: Layout = Compact>(ArcBytes<L>);
 
 impl<L: Layout> ArcStr<L> {

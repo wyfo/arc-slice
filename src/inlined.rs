@@ -454,7 +454,6 @@ impl<L: Layout> From<ArcBytes<L>> for SmallArcBytes<L> {
     }
 }
 
-#[repr(transparent)]
 pub struct SmallStr<L: Layout = Compact>(SmallBytes<L>);
 
 impl<L: Layout> SmallStr<L> {
