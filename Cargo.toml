@@ -2,7 +2,7 @@
 name = "arc-slice"
 version = "0.1.0-alpha.2"
 edition = "2021"
-rust-version = "1.74.0"
+rust-version = "1.61.0"
 exclude = [".*"]
 description = "Shared memory slices"
 homepage = "https://github.com/wyfo/arc-slice"
@@ -20,10 +20,11 @@ license = "MIT"
 repository = "https://github.com/wyfo/arc-slice"
 
 [features]
-default = ["std"]
-inlined = ["dep:either"]
+default = ["std", "const-slice"]
+const-slice = []
+inlined = ["either"] # MSRV use dep:
 abort-on-refcount-overflow = []
-portable-atomic-util = ["portable-atomic", "dep:portable-atomic-util"]
+#portable-atomic-util = ["portable-atomic", "portable-atomic-util"]
 raw-buffer = []
 std = ["abort-on-refcount-overflow"]
 # default layout
@@ -65,4 +66,5 @@ missing_debug_implementations = "deny"
 [lints.clippy]
 dbg_macro = "forbid"
 semicolon_if_nothing_returned = "forbid"
+incompatible_msrv = "allow"
 #undocumented_unsafe_blocks = "forbid"

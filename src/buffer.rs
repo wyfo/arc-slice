@@ -10,6 +10,7 @@ use core::{
 #[cfg(feature = "portable-atomic-util")]
 use portable_atomic_util::Arc;
 
+pub(crate) use crate::buffer::private::DynBuffer;
 #[allow(unused_imports)]
 use crate::msrv::SlicePtrExt;
 use crate::{
@@ -90,7 +91,6 @@ impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for [T; N] {
         true
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[doc(hidden)]
     #[inline(always)]
     unsafe fn try_from_array(array: ArrayPtr<T>) -> Option<Self> {
@@ -490,12 +490,6 @@ unsafe impl<B: StringBuffer + Send + Sync> RawStringBuffer for Arc<B> {
     }
 }
 
-pub(crate) unsafe trait DynBuffer {
-    fn has_metadata() -> bool;
-    fn get_metadata(&self, type_id: TypeId) -> Option<NonNull<()>>;
-    unsafe fn take_buffer(this: *mut Self, type_id: TypeId, buffer: NonNull<()>) -> bool;
-}
-
 unsafe impl<B: BorrowMetadata + 'static> DynBuffer for B {
     fn has_metadata() -> bool {
         is_not!(B::Metadata, ())
@@ -596,5 +590,18 @@ unsafe impl<B: 'static, M: 'static> DynBuffer for BufferWithMetadata<B, M> {
             return true;
         }
         false
+    }
+}
+
+pub(crate) mod private {
+    use core::{any::TypeId, ptr::NonNull};
+
+    /// # Safety
+    ///
+    /// TODO
+    pub unsafe trait DynBuffer {
+        fn has_metadata() -> bool;
+        fn get_metadata(&self, type_id: TypeId) -> Option<NonNull<()>>;
+        unsafe fn take_buffer(this: *mut Self, type_id: TypeId, buffer: NonNull<()>) -> bool;
     }
 }

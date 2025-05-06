@@ -15,7 +15,7 @@ use core::{
 };
 
 #[allow(unused_imports)]
-use crate::msrv::{NonNullExt, StrictProvenance};
+use crate::msrv::{ConstPtrExt, NonNullExt, StrictProvenance};
 use crate::{
     atomic,
     atomic::AtomicUsize,
@@ -53,7 +53,7 @@ impl<T> CompactVec<T> {
         true
     }
 
-    #[allow(unstable_name_collisions, clippy::incompatible_msrv)]
+    #[allow(unstable_name_collisions)]
     unsafe fn take_buffer(
         buffer: NonNull<()>,
         arc: ErasedArc,
@@ -194,7 +194,8 @@ enum VTableOrCapacity {
 
 type ErasedArc = NonNull<ArcInner<()>>;
 
-pub(crate) struct Arc<T, const ANY_BUFFER: bool = true> {
+#[allow(missing_debug_implementations)]
+pub struct Arc<T, const ANY_BUFFER: bool = true> {
     inner: ErasedArc,
     _phantom: PhantomData<T>,
 }
@@ -205,12 +206,10 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         Ok(layout)
     }
 
-    #[allow(clippy::incompatible_msrv)]
     fn allocate_slice(len: usize) -> (Self, NonNull<T>) {
         let layout = Self::slice_layout(len).expect("capacity overflow");
-        let Some(inner) = NonNull::new(unsafe { alloc(layout) }.cast::<ArcInner<[T; 0]>>()) else {
-            handle_alloc_error(layout);
-        };
+        let inner = NonNull::new(unsafe { alloc(layout) }.cast::<ArcInner<[T; 0]>>())
+            .unwrap_or_else(|| handle_alloc_error(layout));
         unsafe {
             inner.write(ArcInner {
                 refcount: AtomicUsize::new(0),
@@ -255,7 +254,6 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         }
     }
 
-    #[allow(clippy::incompatible_msrv)]
     fn vtable_or_capa(&self) -> VTableOrCapacity {
         let ptr = unsafe { self.inner.as_ref().vtable_or_capacity };
         if ANY_BUFFER && ptr.addr() & CAPACITY_FLAG == 0 {
@@ -265,7 +263,6 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         }
     }
 
-    #[allow(clippy::incompatible_msrv)]
     pub(crate) fn is_unique(&self) -> bool {
         let inner = unsafe { self.inner.as_ref() };
         inner.refcount.load(Ordering::Relaxed) == 1
@@ -285,7 +282,6 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         }
     }
 
-    #[allow(clippy::incompatible_msrv)]
     pub(crate) fn take_buffer<B: Buffer<T>>(
         self,
         start: NonNull<T>,

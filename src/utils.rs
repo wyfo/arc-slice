@@ -7,6 +7,8 @@ use core::{
 };
 
 use crate::macros::{is, is_not};
+#[allow(unused_imports)]
+use crate::msrv::ConstPtrExt;
 
 #[inline(always)]
 pub(crate) fn try_transmute<T: Any, U: Any>(any: T) -> Result<U, T> {
@@ -25,8 +27,8 @@ pub(crate) fn try_transmute_slice<T: Any, U: Any>(slice: &[T]) -> Option<&[U]> {
 
 pub(crate) const fn slice_into_raw_parts<T>(slice: &[T]) -> (NonNull<T>, usize) {
     (
-        // MSRV 1.85 const `NonNull::new`
-        unsafe { NonNull::new_unchecked(slice.as_ptr().cast_mut()) },
+        // MSRV 1.65 const `<*const _>::cast_mut` + 1.85 const `NonNull::new`
+        unsafe { NonNull::new_unchecked(slice.as_ptr() as _) },
         slice.len(),
     )
 }
@@ -59,7 +61,7 @@ fn debug_bytes(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
         } else if (0x20..0x7f).contains(&b) {
             write!(f, "{}", b as char)?;
         } else {
-            write!(f, "\\x{:02x}", b)?;
+            write!(f, "\\x{b:02x}")?;
         }
     }
     write!(f, "\"")?;
@@ -78,14 +80,14 @@ where
 
 pub(crate) fn lower_hex(slice: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
     for &b in slice {
-        write!(f, "{:02x}", b)?;
+        write!(f, "{b:02x}")?;
     }
     Ok(())
 }
 
 pub(crate) fn upper_hex(slice: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
     for &b in slice {
-        write!(f, "{:02X}", b)?;
+        write!(f, "{b:02X}")?;
     }
     Ok(())
 }

@@ -89,7 +89,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         Self::from_arc(start, length, capacity, arc)
     }
 
-    #[allow(clippy::incompatible_msrv)]
     fn set_tail_flag(&mut self) {
         if self.length < self.capacity {
             self.arc_or_offset = self
@@ -132,7 +131,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     /// # Safety
     ///
     /// `start` and `length` must represent a valid slice for the slice buffer.
-    #[allow(clippy::incompatible_msrv)]
     pub(crate) unsafe fn set_start_len(&mut self, start: NonNull<T>, len: usize) {
         self.start = self.start.with_addr(start.addr());
         self.length = len;
@@ -149,7 +147,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         this
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline(always)]
     fn inner(&self) -> Inner<T> {
         let arc_or_offset = self.arc_or_offset.addr().get();
@@ -220,7 +217,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.arc_or_offset = NonNull::new(arc_or_offset).unwrap();
     }
 
-    #[allow(clippy::incompatible_msrv)]
     fn remove_tail_flag(&mut self) {
         self.arc_or_offset = self.arc_or_offset.map_addr(|addr| {
             unsafe { NonZero::new_unchecked(addr.get() & !Self::TAIL_FLAG) }.into()
@@ -251,7 +247,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         self.length = len;
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline]
     pub fn advance(&mut self, offset: usize) {
         if offset > self.length {
@@ -286,7 +281,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         unsafe { ptr::read(self) }
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSliceMut::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
@@ -307,7 +301,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         clone
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSliceMut::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {
@@ -324,7 +317,6 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
         clone
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline]
     pub fn try_unsplit(&mut self, other: ArcSliceMut<T>) -> Result<(), ArcSliceMut<T>> {
         let end = unsafe { self.start.add(self.length) };

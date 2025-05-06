@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 use core::{any::Any, hint, mem, mem::ManuallyDrop, ptr::NonNull};
 
+#[allow(unused_imports)]
+use crate::msrv::{ConstPtrExt, OptionExt};
 use crate::{
     arc::Arc, buffer::Buffer, layout::OptimizedLayout, msrv::ptr, slice::ArcSliceLayout,
     utils::static_slice,
@@ -68,13 +70,13 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
     ) -> Option<B> {
-        let Some(arc) = Self::arc::<T>(data) else {
-            return B::try_from_static(unsafe { static_slice(start, length) });
-        };
-        ManuallyDrop::into_inner(arc)
-            .take_buffer(start, length)
-            .map_err(mem::forget)
-            .ok()
+        match Self::arc::<T>(data) {
+            Some(arc) => ManuallyDrop::into_inner(arc)
+                .take_buffer(start, length)
+                .map_err(mem::forget)
+                .ok(),
+            None => B::try_from_static(unsafe { static_slice(start, length) }),
+        }
     }
 
     unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceLayout>(

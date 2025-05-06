@@ -1,8 +1,6 @@
-#[allow(private_bounds)]
 pub trait Layout: private::Layout {}
 pub trait AnyBufferLayout: Layout {}
 pub trait StaticLayout: Layout {}
-#[allow(private_bounds)]
 pub trait LayoutMut: Layout + private::LayoutMut {}
 
 #[derive(Debug)]
@@ -62,17 +60,15 @@ cfg_if::cfg_if! {
 
 #[cfg(not(feature = "inlined"))]
 mod private {
-    pub(super) use crate::{
-        slice::ArcSliceLayout as Layout, slice_mut::ArcSliceMutLayout as LayoutMut,
-    };
+    pub use crate::{slice::ArcSliceLayout as Layout, slice_mut::ArcSliceMutLayout as LayoutMut};
 }
 
 #[cfg(feature = "inlined")]
 mod private {
     use crate::{inlined::InlinedLayout, slice::ArcSliceLayout};
 
-    pub(super) trait Layout: ArcSliceLayout + InlinedLayout {}
+    pub trait Layout: ArcSliceLayout + InlinedLayout {}
     impl<L> Layout for L where L: ArcSliceLayout + InlinedLayout {}
 
-    pub(super) use crate::slice_mut::ArcSliceMutLayout as LayoutMut;
+    pub use crate::slice_mut::ArcSliceMutLayout as LayoutMut;
 }

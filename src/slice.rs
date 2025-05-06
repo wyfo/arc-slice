@@ -14,6 +14,8 @@ use core::{
 #[cfg(feature = "raw-buffer")]
 use crate::buffer::RawBuffer;
 #[allow(unused_imports)]
+use crate::msrv::ConstPtrExt;
+#[allow(unused_imports)]
 use crate::msrv::{ptr, NonNullExt, StrictProvenance};
 use crate::{
     arc::Arc,
@@ -31,7 +33,7 @@ mod optimized;
 // mod raw;
 mod vec;
 
-pub(crate) trait ArcSliceLayout: 'static {
+pub trait ArcSliceLayout: 'static {
     type Data;
     const STATIC_DATA: Option<Self::Data> = None;
     // MSRV 1.83 const `Option::unwrap`
@@ -143,8 +145,15 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         self.len() == 0
     }
 
+    #[cfg(feature = "const-slice")]
     #[inline]
     pub const fn as_slice(&self) -> &[T] {
+        unsafe { core::slice::from_raw_parts(self.start.as_ptr(), self.len()) }
+    }
+
+    #[cfg(not(feature = "const-slice"))]
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
         unsafe { core::slice::from_raw_parts(self.start.as_ptr(), self.len()) }
     }
 
@@ -182,7 +191,6 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         unsafe { self.subslice_impl(offset, len) }
     }
 
-    #[allow(clippy::incompatible_msrv)]
     pub(crate) unsafe fn subslice_impl(&self, offset: usize, len: usize) -> Self {
         // MSRV if-let-chains
         if let Some(empty) = Self::new_empty(unsafe { self.start.add(offset) }, len) {
@@ -194,7 +202,6 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         clone
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline]
     pub fn advance(&mut self, offset: usize) {
         if offset > self.length {
@@ -212,7 +219,6 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         }
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSlice::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
@@ -230,7 +236,6 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         clone
     }
 
-    #[allow(clippy::incompatible_msrv)]
     #[inline]
     #[must_use = "consider `ArcSlice::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {

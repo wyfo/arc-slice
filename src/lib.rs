@@ -36,6 +36,6 @@ mod slice_mut {
     pub struct ArcSliceMut<T, L = crate::layout::DefaultLayoutMut>(
         core::marker::PhantomData<(T, L)>,
     );
-    pub(crate) trait ArcSliceMutLayout {}
+    pub trait ArcSliceMutLayout {}
     impl<T> ArcSliceMutLayout for T {}
 }

@@ -1,4 +1,3 @@
-#![allow(clippy::incompatible_msrv)]
 use std::hint::black_box;
 
 use arc_slice::ArcBytes;

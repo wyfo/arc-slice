@@ -7,12 +7,75 @@ use ptr::NonNull;
 // 1.85: const `NonNull::new_unchecked` -> const `NonNull::new`
 
 #[allow(dead_code)]
+pub(crate) trait BoolExt {
+    fn then_some<T>(self, t: T) -> Option<T>;
+}
+
+impl BoolExt for bool {
+    fn then_some<T>(self, t: T) -> Option<T> {
+        if self {
+            Some(t)
+        } else {
+            None
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) trait OptionExt<T> {
+    #[allow(clippy::wrong_self_convention)]
+    fn is_some_and(self, f: impl FnOnce(T) -> bool) -> bool;
+}
+
+impl<T> OptionExt<T> for Option<T> {
+    fn is_some_and(self, f: impl FnOnce(T) -> bool) -> bool {
+        match self {
+            None => false,
+            Some(x) => f(x),
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub(crate) trait StrictProvenance<T>: Sized + Copy {
     type Addr;
     fn addr(self) -> Self::Addr;
     fn with_addr(self, addr: Self::Addr) -> Self;
     fn map_addr(self, f: impl FnOnce(Self::Addr) -> Self::Addr) -> Self {
         self.with_addr(f(self.addr()))
+    }
+}
+
+impl<T> StrictProvenance<T> for *const T {
+    type Addr = usize;
+    fn addr(self) -> Self::Addr {
+        self as usize
+    }
+    fn with_addr(self, addr: Self::Addr) -> Self {
+        let ptr_addr = self as isize;
+        let dest_addr = addr as isize;
+        let offset = dest_addr.wrapping_sub(ptr_addr);
+        self.cast::<u8>().wrapping_offset(offset).cast()
+    }
+}
+
+impl<T> StrictProvenance<T> for *mut T {
+    type Addr = usize;
+    fn addr(self) -> Self::Addr {
+        self.cast_const().addr()
+    }
+    fn with_addr(self, addr: Self::Addr) -> Self {
+        self.cast_const().with_addr(addr).cast_mut()
+    }
+}
+
+impl<T> StrictProvenance<T> for NonNull<T> {
+    type Addr = NonZero<usize>;
+    fn addr(self) -> Self::Addr {
+        NonZero::new(self.as_ptr().addr()).unwrap()
+    }
+    fn with_addr(self, addr: Self::Addr) -> Self {
+        unsafe { NonNull::new_unchecked(self.as_ptr().with_addr(addr.get())) }
     }
 }
 
@@ -30,8 +93,9 @@ impl<T> SubPtrExt<T> for *const T {
 
 impl<T> SubPtrExt<T> for *mut T {
     type Origin = *const T;
-    unsafe fn sub_ptr(self, origin: *const T) -> usize {
-        unsafe { self.offset_from(origin).try_into().unwrap_unchecked() }
+    #[allow(unstable_name_collisions)]
+    unsafe fn sub_ptr(self, origin: Self::Origin) -> usize {
+        unsafe { self.cast_const().sub_ptr(origin) }
     }
 }
 
@@ -50,13 +114,41 @@ pub trait SlicePtrExt<T> {
 
 impl<T> SlicePtrExt<T> for *const [T] {
     fn len(self) -> usize {
-        unsafe { (*self).len() }
+        #[allow(clippy::needless_borrow)]
+        unsafe {
+            (&*self).len()
+        }
     }
 }
 
 impl<T> SlicePtrExt<T> for *mut [T] {
     fn len(self) -> usize {
-        unsafe { (*self).len() }
+        #[allow(clippy::needless_borrow)]
+        unsafe {
+            (&*self).len()
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) trait ConstPtrExt<T>: Sized + Copy {
+    fn cast_mut(self) -> *mut T;
+}
+
+impl<T> ConstPtrExt<T> for *const T {
+    fn cast_mut(self) -> *mut T {
+        self.cast_mut()
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) trait MutPtrExt<T>: Sized + Copy {
+    fn cast_const(self) -> *const T;
+}
+
+impl<T> MutPtrExt<T> for *mut T {
+    fn cast_const(self) -> *const T {
+        self as _
     }
 }
 
@@ -96,7 +188,7 @@ impl<T: ?Sized> BoxExt<T> for Box<T> {
     }
 }
 
-pub(crate) trait Zeroable {
+pub trait Zeroable {
     type NonZero;
     fn non_zero(self) -> Option<Self::NonZero>;
     fn get(n: Self::NonZero) -> Self;
@@ -112,8 +204,8 @@ impl Zeroable for usize {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct NonZero<T: Zeroable>(T::NonZero);
+#[derive(Debug, Clone, Copy)]
+pub struct NonZero<T: Zeroable>(T::NonZero);
 
 impl<T: Zeroable> NonZero<T> {
     pub(crate) fn new(n: T) -> Option<Self> {
@@ -137,43 +229,6 @@ impl From<NonZero<usize>> for NonZeroUsize {
 
 pub(crate) mod ptr {
     pub(crate) use core::ptr::*;
-
-    use crate::msrv::{NonZero, StrictProvenance};
-
-    impl<T> StrictProvenance<T> for *const T {
-        type Addr = usize;
-        fn addr(self) -> Self::Addr {
-            self as usize
-        }
-        fn with_addr(self, addr: Self::Addr) -> Self {
-            let ptr_addr = self as isize;
-            let dest_addr = addr as isize;
-            let offset = dest_addr.wrapping_sub(ptr_addr);
-            self.cast::<u8>().wrapping_offset(offset).cast()
-        }
-    }
-
-    #[allow(clippy::incompatible_msrv)]
-    impl<T> StrictProvenance<T> for *mut T {
-        type Addr = usize;
-        fn addr(self) -> Self::Addr {
-            self.cast_const().addr()
-        }
-        fn with_addr(self, addr: Self::Addr) -> Self {
-            self.cast_const().with_addr(addr).cast_mut()
-        }
-    }
-
-    #[allow(clippy::incompatible_msrv)]
-    impl<T> StrictProvenance<T> for NonNull<T> {
-        type Addr = NonZero<usize>;
-        fn addr(self) -> Self::Addr {
-            NonZero::new(self.as_ptr().addr()).unwrap()
-        }
-        fn with_addr(self, addr: Self::Addr) -> Self {
-            unsafe { NonNull::new_unchecked(self.as_ptr().with_addr(addr.get())) }
-        }
-    }
 
     pub(crate) const fn from_ref<T: ?Sized>(t: &T) -> *const T {
         t as _

@@ -7,7 +7,7 @@ use core::{
 };
 
 #[allow(unused_imports)]
-use crate::msrv::StrictProvenance;
+use crate::msrv::{BoolExt, StrictProvenance};
 use crate::{
     arc::Arc,
     atomic::{AtomicPtr, Ordering},
@@ -28,7 +28,6 @@ enum Data<T> {
 }
 
 impl<T> Data<T> {
-    #[allow(clippy::incompatible_msrv)]
     #[inline(always)]
     fn from_ptr(ptr: *mut ()) -> Self {
         match NonNull::new(ptr) {
@@ -79,7 +78,11 @@ impl DataPtr {
         let arc = match self.0.compare_exchange(
             Self::capacity_as_ptr(capacity),
             guard.as_ptr(),
-            Ordering::Release,
+            if cfg!(feature = "const-slice") {
+                Ordering::AcqRel
+            } else {
+                Ordering::Release
+            },
             Ordering::Acquire,
         ) {
             Ok(_) => guard.into(),
