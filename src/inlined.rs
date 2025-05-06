@@ -17,7 +17,7 @@ use either::Either;
 
 use crate::{
     buffer::{Buffer, StringBuffer},
-    layout::{BoxedSliceLayout, DefaultLayout, Layout, OptimizedLayout, RawLayout, VecLayout},
+    layout::{BoxedSliceLayout, DefaultLayout, Layout, RawLayout, SimpleLayout, VecLayout},
     msrv::ptr,
     str::{check_char_boundary, FromUtf8Error, StringBufWrapper},
     utils::{debug_slice, lower_hex, offset_len, panic_out_of_range, upper_hex},
@@ -36,7 +36,7 @@ const _3_WORDS_LEN: usize = 3 * size_of::<usize>() - 2;
 const _4_WORDS_LEN: usize = 4 * size_of::<usize>() - 2;
 
 impl<const ANY_BUFFER: bool, const STATIC: bool> InlinedLayout
-    for OptimizedLayout<ANY_BUFFER, STATIC>
+    for SimpleLayout<ANY_BUFFER, STATIC>
 {
     const LEN: usize = _3_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _3_WORDS_LEN];

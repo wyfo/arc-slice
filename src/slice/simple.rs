@@ -4,11 +4,15 @@ use core::{any::Any, hint, mem, mem::ManuallyDrop, ptr::NonNull};
 #[allow(unused_imports)]
 use crate::msrv::{ConstPtrExt, OptionExt};
 use crate::{
-    arc::Arc, buffer::Buffer, layout::OptimizedLayout, msrv::ptr, slice::ArcSliceLayout,
-    utils::static_slice,
+    arc::Arc,
+    buffer::Buffer,
+    layout::SimpleLayout,
+    msrv::ptr,
+    slice::ArcSliceLayout,
+    utils::{static_slice, try_transmute},
 };
 
-impl<const ANY_BUFFER: bool, const STATIC: bool> OptimizedLayout<ANY_BUFFER, STATIC> {
+impl<const ANY_BUFFER: bool, const STATIC: bool> SimpleLayout<ANY_BUFFER, STATIC> {
     fn arc<T>(data: &<Self as ArcSliceLayout>::Data) -> Option<ManuallyDrop<Arc<T, ANY_BUFFER>>> {
         match data {
             Some(ptr) => Some(ManuallyDrop::new(unsafe { Arc::from_raw(*ptr) })),
@@ -19,7 +23,7 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> OptimizedLayout<ANY_BUFFER, STA
 }
 
 impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
-    for OptimizedLayout<ANY_BUFFER, STATIC>
+    for SimpleLayout<ANY_BUFFER, STATIC>
 {
     type Data = Option<NonNull<()>>;
 
@@ -75,7 +79,7 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
                 .take_buffer(start, length)
                 .map_err(mem::forget)
                 .ok(),
-            None => B::try_from_static(unsafe { static_slice(start, length) }),
+            None => try_transmute(unsafe { static_slice(start, length) }).ok(),
         }
     }
 

@@ -43,18 +43,6 @@ pub trait Buffer<T>: Sized + Send + Sync + 'static {
     unsafe fn try_from_array(_array: ArrayPtr<T>) -> Option<Self> {
         None
     }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_static(_slice: &'static [T]) -> Option<Self> {
-        None
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_vec(vec: Vec<T>) -> Result<Self, Vec<T>> {
-        Err(vec)
-    }
 }
 
 impl<T: Send + Sync + 'static> Buffer<T> for &'static [T] {
@@ -71,12 +59,6 @@ impl<T: Send + Sync + 'static> Buffer<T> for &'static [T] {
     #[inline(always)]
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
         ArcSlice::from_static(self)
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_static(slice: &'static [T]) -> Option<Self> {
-        Some(slice)
     }
 }
 
@@ -113,16 +95,6 @@ impl<T: Send + Sync + 'static> Buffer<T> for Box<[T]> {
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
         self.into()
     }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_vec(vec: Vec<T>) -> Result<Self, Vec<T>> {
-        if vec.len() == vec.capacity() {
-            Ok(vec.into())
-        } else {
-            Err(vec)
-        }
-    }
 }
 
 impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
@@ -139,12 +111,6 @@ impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
     #[inline(always)]
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
         self.into()
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_vec(vec: Vec<T>) -> Result<Self, Vec<T>> {
-        Ok(vec)
     }
 }
 
@@ -325,18 +291,6 @@ pub trait StringBuffer: Sized + Send + Sync + 'static {
     fn as_str(&self) -> &str;
 
     fn is_unique(&self) -> bool;
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_static(_s: &'static str) -> Option<Self> {
-        None
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_string(s: String) -> Result<Self, String> {
-        Err(s)
-    }
 }
 
 impl StringBuffer for &'static str {
@@ -348,12 +302,6 @@ impl StringBuffer for &'static str {
     #[inline]
     fn is_unique(&self) -> bool {
         false
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_static(s: &'static str) -> Option<Self> {
-        Some(s)
     }
 }
 
@@ -367,16 +315,6 @@ impl StringBuffer for Box<str> {
     fn is_unique(&self) -> bool {
         true
     }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_string(s: String) -> Result<Self, String> {
-        if s.len() == s.capacity() {
-            Ok(s.into())
-        } else {
-            Err(s)
-        }
-    }
 }
 
 impl StringBuffer for String {
@@ -388,12 +326,6 @@ impl StringBuffer for String {
     #[inline]
     fn is_unique(&self) -> bool {
         true
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn try_from_string(s: String) -> Result<Self, String> {
-        Ok(s)
     }
 }
 
@@ -580,7 +512,7 @@ unsafe impl<B: 'static, M: 'static> DynBuffer for BufferWithMetadata<B, M> {
     }
 
     fn get_metadata(&self, type_id: TypeId) -> Option<NonNull<()>> {
-        is!({ type_id }, B).then(|| NonNull::from(&self.metadata).cast())
+        is!({ type_id }, M).then(|| NonNull::from(&self.metadata).cast())
     }
 
     unsafe fn take_buffer(this: *mut Self, type_id: TypeId, buffer: NonNull<()>) -> bool {

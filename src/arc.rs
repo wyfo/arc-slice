@@ -19,7 +19,7 @@ use crate::msrv::{ConstPtrExt, NonNullExt, StrictProvenance};
 use crate::{
     atomic,
     atomic::AtomicUsize,
-    buffer::{ArrayPtr, Buffer, BufferMut, BufferWithMetadata, DynBuffer},
+    buffer::{ArrayPtr, Buffer, BufferMut, BufferMutExt, BufferWithMetadata, DynBuffer},
     macros::is,
     msrv::{ptr, BoxExt, SubPtrExt},
     utils::slice_into_raw_parts,
@@ -62,14 +62,14 @@ impl<T> CompactVec<T> {
         length: usize,
     ) -> Option<NonNull<()>>
     where
-        T: 'static,
+        T: Send + Sync + 'static,
     {
         let vec = &unsafe { arc.cast::<ArcInner<Self>>().as_ref() }.buffer;
         if is!({ type_id }, Vec<T>) {
-            if unsafe { start.cast().sub_ptr(vec.start) } > 0 {
-                unsafe { ptr::copy(start.cast().as_ptr(), vec.start.as_ptr(), length) };
-            }
-            let vec = unsafe { Vec::from_raw_parts(vec.start.as_ptr(), length, vec.capacity) };
+            let offset = unsafe { start.cast().sub_ptr(vec.start) };
+            let mut vec =
+                unsafe { Vec::from_raw_parts(vec.start.as_ptr(), offset + length, vec.capacity) };
+            unsafe { vec.shift_left(offset, length) };
             unsafe { buffer.cast().write(vec) };
             return Some(buffer);
         } else if is!({ type_id }, Box<[T]>) && length == vec.capacity {
@@ -82,12 +82,13 @@ impl<T> CompactVec<T> {
 }
 
 impl<T> From<Vec<T>> for CompactVec<T> {
-    fn from(mut value: Vec<T>) -> Self {
+    fn from(value: Vec<T>) -> Self {
         assert!(!mem::needs_drop::<T>());
+        let mut vec = ManuallyDrop::new(value);
 
         CompactVec {
-            start: NonNull::new(value.as_mut_ptr()).unwrap(),
-            capacity: value.capacity(),
+            start: NonNull::new(vec.as_mut_ptr()).unwrap(),
+            capacity: vec.capacity(),
         }
     }
 }
@@ -176,7 +177,7 @@ impl ArcVTable {
 
     fn new_compact_vec<T>() -> &'static Self
     where
-        T: 'static,
+        T: Send + Sync + 'static,
     {
         &Self {
             dealloc: Self::dealloc::<CompactVec<T>>,
@@ -212,7 +213,7 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
             .unwrap_or_else(|| handle_alloc_error(layout));
         unsafe {
             inner.write(ArcInner {
-                refcount: AtomicUsize::new(0),
+                refcount: AtomicUsize::new(1),
                 vtable_or_capacity: ptr::without_provenance(
                     CAPACITY_FLAG | (len << CAPACITY_SHIFT),
                 ),
@@ -463,9 +464,10 @@ impl<B> Drop for ArcGuard<B> {
 
 #[allow(unstable_name_collisions)]
 impl<T, B> From<ArcGuard<B>> for Arc<T> {
-    fn from(mut value: ArcGuard<B>) -> Self {
+    fn from(value: ArcGuard<B>) -> Self {
+        let mut guard = ManuallyDrop::new(value);
         Self {
-            inner: Box::into_non_null(unsafe { ManuallyDrop::take(&mut value.0) }).cast(),
+            inner: Box::into_non_null(unsafe { ManuallyDrop::take(&mut guard.0) }).cast(),
             _phantom: PhantomData,
         }
     }

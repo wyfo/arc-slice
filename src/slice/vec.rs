@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     any::Any,
     hint, mem,
@@ -13,9 +13,10 @@ use crate::{
     atomic::{AtomicPtr, Ordering},
     buffer::{Buffer, BufferMutExt},
     layout::{BoxedSliceLayout, VecLayout},
+    macros::is,
     msrv::{ptr, NonZero, SubPtrExt},
     slice::ArcSliceLayout,
-    utils::static_slice,
+    utils::{static_slice, try_transmute},
 };
 
 const CAPACITY_FLAG: usize = 1;
@@ -241,13 +242,18 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
     ) -> Option<B> {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
-            Data::Static => B::try_from_static(unsafe { static_slice(start, length) }),
-            Data::Capacity(capacity) => {
+            Data::Static => try_transmute(unsafe { static_slice(start, length) }).ok(),
+            Data::Capacity(capacity) if is!(B, Vec<T>) => {
                 let mut vec = unsafe { Self::rebuild_vec(start, length, capacity, *base) };
                 let offset = unsafe { start.as_ptr().sub_ptr(vec.as_mut_ptr()) };
                 unsafe { vec.shift_left(offset, length) };
-                B::try_from_vec(vec).map_err(mem::forget).ok()
+                Some(try_transmute::<_, B>(vec).ok().unwrap())
             }
+            Data::Capacity(capacity) if is!(B, Box<[T]>) && length == capacity.get() => {
+                let slice = ptr::slice_from_raw_parts_mut(start.as_ptr(), length);
+                Some(try_transmute(unsafe { Box::from_raw(slice) }).ok().unwrap())
+            }
+            Data::Capacity(_) => None,
             Data::Arc(arc) => ManuallyDrop::into_inner(arc)
                 .take_buffer(start, length)
                 .map_err(mem::forget)
