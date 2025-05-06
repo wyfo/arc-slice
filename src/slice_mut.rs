@@ -17,12 +17,23 @@ use crate::{
     arc::{unit_metadata, Arc},
     buffer::{BorrowMetadata, BufferMut, BufferMutExt},
     error::TryReserveError,
-    layout::Layout,
+    layout::{
+        AnyBufferLayout, AnyBufferLayoutMut, Layout, LayoutMut, OptimizedLayout,
+        OptimizedLayoutMut, VecLayoutMut,
+    },
     macros::is,
     msrv::{ptr, NonZero, SubPtrExt},
     utils::{debug_slice, panic_out_of_range},
     ArcSlice,
 };
+
+pub trait ArcSliceMutLayout {}
+
+impl<const ANY_BUFFER: bool, const UNIQUE_HINT: bool> ArcSliceMutLayout
+    for OptimizedLayoutMut<ANY_BUFFER, UNIQUE_HINT>
+{
+}
+impl ArcSliceMutLayout for VecLayoutMut {}
 
 pub struct ArcSliceMut<T: Send + Sync + 'static> {
     start: NonNull<T>,
@@ -380,7 +391,7 @@ impl<T: Send + Sync + 'static> ArcSliceMut<T> {
     }
 
     #[inline]
-    pub fn get_metadata<M: Any>(&self) -> Option<&M> {
+    pub fn metadata<M: Any>(&self) -> Option<&M> {
         match self.inner() {
             Inner::Arc { arc, .. } => arc.get_metadata(),
             _ if is!(M, ()) => Some(unit_metadata()),
@@ -563,19 +574,13 @@ impl<T: fmt::Debug + Send + Sync + 'static> fmt::Debug for ArcSliceMut<T> {
 
 impl fmt::LowerHex for ArcSliceMut<u8> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02x}", b)?;
-        }
-        Ok(())
+        lower_hex(self, f)
     }
 }
 
 impl fmt::UpperHex for ArcSliceMut<u8> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02X}", b)?;
-        }
-        Ok(())
+        upper_hex(self, f)
     }
 }
 
@@ -685,5 +690,23 @@ impl fmt::Write for ArcSliceMut<u8> {
     #[inline]
     fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
         fmt::write(self, args)
+    }
+}
+
+struct Plop<L: LayoutMut>(L);
+impl<L: AnyBufferLayoutMut> Plop<L> {
+    fn try_freeze<L2: Layout>(self) -> Result<L2, Self> {
+        todo!()
+    }
+    fn freeze<L2: AnyBufferLayout>(self) -> L2 {
+        todo!()
+    }
+}
+
+impl<const UNIQUE_HINT: bool> Plop<OptimizedLayoutMut<false, UNIQUE_HINT>> {
+    fn freeze<const STATIC2: bool, const UNIQUE_HINT2: bool>(
+        self,
+    ) -> OptimizedLayout<false, STATIC2, UNIQUE_HINT2> {
+        todo!()
     }
 }

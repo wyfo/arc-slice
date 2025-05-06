@@ -1,12 +1,38 @@
 use core::{
+    any::Any,
     fmt,
+    mem::MaybeUninit,
     ops::{Bound, RangeBounds},
+    ptr::NonNull,
 };
 
-use crate::macros::is;
+use crate::macros::{is, is_not};
 
-pub(crate) fn transmute_slice<T: 'static, U: 'static>(slice: &[T]) -> Option<&[U]> {
+#[inline(always)]
+pub(crate) fn try_transmute<T: Any, U: Any>(any: T) -> Result<U, T> {
+    if is_not!(T, U) {
+        return Err(any);
+    }
+    let mut res = MaybeUninit::<U>::uninit();
+    unsafe { res.as_mut_ptr().cast::<T>().write(any) };
+    Ok(unsafe { res.assume_init() })
+}
+
+#[inline(always)]
+pub(crate) fn try_transmute_slice<T: Any, U: Any>(slice: &[T]) -> Option<&[U]> {
     is!(T, U).then(|| unsafe { slice.align_to().1 })
+}
+
+pub(crate) const fn slice_into_raw_parts<T>(slice: &[T]) -> (NonNull<T>, usize) {
+    (
+        // MSRV 1.85 const `NonNull::new`
+        unsafe { NonNull::new_unchecked(slice.as_ptr().cast_mut()) },
+        slice.len(),
+    )
+}
+
+pub(crate) unsafe fn static_slice<T: 'static>(start: NonNull<T>, length: usize) -> &'static [T] {
+    unsafe { core::slice::from_raw_parts(start.as_ptr(), length) }
 }
 
 /// Alternative implementation of `std::fmt::Debug` for byte slice.
@@ -44,10 +70,24 @@ pub(crate) fn debug_slice<T>(slice: &[T], f: &mut fmt::Formatter<'_>) -> fmt::Re
 where
     T: fmt::Debug + 'static,
 {
-    match transmute_slice(slice) {
+    match try_transmute_slice(slice) {
         Some(bytes) => debug_bytes(bytes, f),
         None => write!(f, "{slice:?}"),
     }
+}
+
+pub(crate) fn lower_hex(slice: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    for &b in slice {
+        write!(f, "{:02x}", b)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn upper_hex(slice: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    for &b in slice {
+        write!(f, "{:02X}", b)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn offset_len(len: usize, range: impl RangeBounds<usize>) -> (usize, usize) {
@@ -70,24 +110,13 @@ pub(crate) fn offset_len(len: usize, range: impl RangeBounds<usize>) -> (usize, 
     (offset, len)
 }
 
-fn offset_len_subslice_impl<T>(slice: &[T], subslice: &[T]) -> Option<(usize, usize)> {
+pub(crate) fn offset_len_subslice<T>(slice: &[T], subslice: &[T]) -> Option<(usize, usize)> {
     let offset = (subslice.as_ptr() as usize).checked_sub(slice.as_ptr() as usize)?;
     let len = subslice.len();
     if offset + len > slice.len() {
         return None;
     }
     Some((offset, len))
-}
-
-pub(crate) fn offset_len_subslice<T>(slice: &[T], subslice: &[T]) -> (usize, usize) {
-    offset_len_subslice_impl(slice, subslice).unwrap_or_else(|| panic_out_of_range())
-}
-
-pub(crate) unsafe fn offset_len_subslice_unchecked<T>(
-    slice: &[T],
-    subslice: &[T],
-) -> (usize, usize) {
-    unsafe { offset_len_subslice_impl(slice, subslice).unwrap_unchecked() }
 }
 
 #[cold]
@@ -98,4 +127,27 @@ fn panic_invalid_range() -> ! {
 #[cold]
 pub(crate) fn panic_out_of_range() -> ! {
     panic!("out of range")
+}
+
+#[cfg(feature = "abort-on-refcount-overflow")]
+#[inline(never)]
+#[cold]
+pub(crate) fn abort() -> ! {
+    #[cfg(feature = "std")]
+    {
+        extern crate std;
+        std::process::abort();
+    }
+    // in no_std, use double panic
+    #[cfg(not(feature = "std"))]
+    {
+        struct Abort;
+        impl Drop for Abort {
+            fn drop(&mut self) {
+                panic!("abort");
+            }
+        }
+        let _guard = Abort;
+        panic!("abort");
+    }
 }

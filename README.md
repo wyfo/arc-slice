@@ -88,7 +88,7 @@ It can allow to test `arc-slice` implementation, to check if it can perform bett
 
 ## Safety
 
-This library uses unsafe code. It is tested with [miri](https://github.com/rust-lang/miri) and [loom](https://crates.io/crates/loom) to ensure the memory safety and the correct synchronization.
+This library uses unsafe code. It is tested with [miri](https://github.com/rust-lang/miri) to ensure the memory safety and the correct synchronization.
 
 
 [^1]: Only two tests are not passing, but it is just about the capacity of a reallocated `BytesMut` for which you cannot reserve because it is shared. I don't really agree with `bytes` behavior here — doubling the previous capacity, even if it's about a small reservation in a small subslice — so I will not say it matters a lot. If it does matter, it is still possible to match `bytes` behavior. 

@@ -1,260 +1,136 @@
-use alloc::{borrow::Cow, boxed::Box, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     any::Any,
     borrow::Borrow,
     cmp, fmt,
     hash::{Hash, Hasher},
-    hint, mem,
+    marker::PhantomData,
+    mem,
     mem::{ManuallyDrop, MaybeUninit},
     ops::{Deref, RangeBounds},
     ptr::NonNull,
 };
 
+#[cfg(feature = "raw-buffer")]
+use crate::buffer::RawBuffer;
 #[allow(unused_imports)]
-use crate::msrv::{NonNullExt, StrictProvenance};
+use crate::msrv::{ptr, NonNullExt, StrictProvenance};
 use crate::{
-    arc::{unit_metadata, Arc},
-    buffer::{BorrowMetadata, Buffer, BufferMutExt},
-    layout::{Compact, Layout, Plain},
-    loom::{
-        atomic_ptr_with_mut,
-        sync::atomic::{AtomicPtr, Ordering},
-    },
+    arc::Arc,
+    buffer::{BorrowMetadata, Buffer, BufferWithMetadata, DynBuffer},
+    layout::{AnyBufferLayout, DefaultLayout, Layout, StaticLayout},
     macros::is,
-    msrv::{ptr, NonZero, SubPtrExt},
+    slice_mut::ArcSliceMut,
     utils::{
-        debug_slice, offset_len, offset_len_subslice, offset_len_subslice_unchecked,
-        panic_out_of_range,
+        debug_slice, lower_hex, offset_len, offset_len_subslice, panic_out_of_range,
+        slice_into_raw_parts, upper_hex,
     },
-    ArcSliceMut,
 };
 
-pub trait ArcSliceLayout {
-    type Base: Copy + 'static;
-    const TRUNCATABLE: bool;
-    fn get_base<T>(full: bool, base: *mut T) -> Option<Self::Base>;
-    fn base_into_ptr<T>(base: Self::Base) -> Option<NonNull<T>>;
-}
+mod optimized;
+// mod raw;
+mod vec;
 
-impl ArcSliceLayout for Compact {
-    type Base = ();
-    const TRUNCATABLE: bool = false;
-    fn get_base<T>(full: bool, _base: *mut T) -> Option<Self::Base> {
-        full.then_some(())
+pub(crate) trait ArcSliceLayout: 'static {
+    type Data;
+    const STATIC_DATA: Option<Self::Data> = None;
+    // MSRV 1.83 const `Option::unwrap`
+    const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::uninit();
+    fn data_from_arc<T>(arc: Arc<T>) -> Self::Data;
+    fn data_from_static<T: Send + Sync + 'static>(slice: &'static [T]) -> Self::Data {
+        Self::STATIC_DATA.unwrap_or_else(|| {
+            Self::data_from_arc(Arc::new_buffer(BufferWithMetadata::new(slice, ())).0)
+        })
     }
-    fn base_into_ptr<T>(_base: Self::Base) -> Option<NonNull<T>> {
+    fn data_from_vec<T: Send + Sync + 'static>(vec: Vec<T>) -> Self::Data;
+    fn data_from_raw_buffer<T, B: DynBuffer + Buffer<T>>(_buffer: *const ()) -> Option<Self::Data> {
         None
     }
-}
-
-impl ArcSliceLayout for Plain {
-    type Base = NonNull<()>;
-    const TRUNCATABLE: bool = true;
-    fn get_base<T>(_full: bool, base: *mut T) -> Option<Self::Base> {
-        Some(NonNull::new(base).unwrap().cast())
+    fn clone<T: Send + Sync + 'static>(
+        start: NonNull<T>,
+        length: usize,
+        data: &Self::Data,
+    ) -> Self::Data;
+    unsafe fn drop<T>(
+        start: NonNull<T>,
+        length: usize,
+        data: &mut ManuallyDrop<Self::Data>,
+        unique_hint: bool,
+    );
+    fn borrowed_data<T>(_data: &Self::Data) -> Option<*const ()> {
+        None
     }
-    fn base_into_ptr<T>(base: Self::Base) -> Option<NonNull<T>> {
-        Some(base.cast())
+    fn clone_borrowed_data<T>(_ptr: *const ()) -> Option<Self::Data> {
+        None
     }
+    fn truncate<T: Send + Sync + 'static>(
+        _start: NonNull<T>,
+        _length: usize,
+        _data: &mut Self::Data,
+    ) {
+    }
+    fn is_unique<T>(data: &Self::Data) -> bool;
+    fn get_metadata<T, M: Any>(data: &Self::Data) -> Option<&M>;
+    unsafe fn take_buffer<T: Send + Sync + 'static, B: Buffer<T>>(
+        start: NonNull<T>,
+        length: usize,
+        data: &mut ManuallyDrop<Self::Data>,
+    ) -> Option<B>;
+    // TODO unsafe because we must unsure `L: FromLayout<Self>`
+    unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceLayout>(
+        start: NonNull<T>,
+        length: usize,
+        data: Self::Data,
+    ) -> L::Data;
 }
 
 #[cfg(not(feature = "inlined"))]
-pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = Compact> {
+pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
     start: NonNull<T>,
     length: usize,
-    arc_or_capa: AtomicPtr<()>,
-    base: MaybeUninit<<L as ArcSliceLayout>::Base>,
+    data: ManuallyDrop<L::Data>,
 }
 
 #[cfg(feature = "inlined")]
 #[repr(C)]
-pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = Compact> {
+pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
     #[cfg(target_endian = "big")]
     length: usize,
-    arc_or_capa: AtomicPtr<()>,
-    base: MaybeUninit<<L as ArcSliceLayout>::Base>,
+    data: <L as ArcSliceLayout>::Data,
     start: NonNull<T>,
     #[cfg(target_endian = "little")]
     length: usize,
 }
 
-const VEC_FLAG: usize = 1;
-const VEC_CAPA_SHIFT: usize = 1;
-
-enum Inner<T> {
-    Static,
-    Vec { capacity: NonZero<usize> },
-    Arc(ManuallyDrop<Arc<T>>),
-}
+unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSlice<T, L> {}
+unsafe impl<T: Send + Sync + 'static, L: Layout> Sync for ArcSlice<T, L> {}
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
-    #[inline]
-    pub fn new<B: Buffer<T>>(buffer: B) -> Self {
-        Self::with_metadata(buffer, ())
-    }
-
-    #[cfg(not(all(loom, test)))]
-    #[inline]
-    pub const fn new_static(slice: &'static [T]) -> Self {
+    fn new_impl(start: NonNull<T>, length: usize, data: L::Data) -> Self {
         Self {
-            arc_or_capa: AtomicPtr::new(ptr::null_mut()),
-            base: MaybeUninit::uninit(),
-            start: unsafe { NonNull::new_unchecked(slice.as_ptr().cast_mut()) },
-            length: slice.len(),
-        }
-    }
-
-    #[cfg(all(loom, test))]
-    pub fn new_static(slice: &'static [T]) -> Self {
-        Self {
-            arc_or_capa: AtomicPtr::new(ptr::null_mut()),
-            base: MaybeUninit::uninit(),
-            start: NonNull::new(slice.as_ptr().cast_mut()).unwrap(),
-            length: slice.len(),
-        }
-    }
-
-    #[inline]
-    pub fn with_metadata<B: Buffer<T>, M: Send + Sync + 'static>(
-        mut buffer: B,
-        metadata: M,
-    ) -> Self {
-        if is!(M, ()) {
-            match buffer.try_into_static() {
-                Ok(slice) => return Self::new_static(slice),
-                Err(b) => buffer = b,
-            }
-            match buffer.try_into_vec() {
-                Ok(vec) => return Self::new_vec(vec),
-                Err(b) => buffer = b,
-            }
-        }
-        let (arc, start, length) = Arc::new(buffer, metadata, 1);
-        unsafe { Self::from_arc(start, length, arc) }
-    }
-
-    #[inline]
-    pub fn with_borrowed_metadata<B: Buffer<T> + BorrowMetadata>(buffer: B) -> Self {
-        let (arc, start, length) = Arc::new_borrow(buffer);
-        unsafe { Self::from_arc(start, length, arc) }
-    }
-
-    fn new_vec(mut vec: Vec<T>) -> Self {
-        if vec.capacity() == 0 {
-            return Self::new_static(&[]);
-        }
-        let Some(base) = L::get_base(vec.len() == vec.capacity(), vec.as_mut_ptr()) else {
-            #[cold]
-            fn alloc<T: Send + Sync + 'static, L: Layout>(vec: Vec<T>) -> ArcSlice<T, L> {
-                let (arc, start, length) = Arc::new(vec, (), 1);
-                unsafe { ArcSlice::from_arc(start, length, arc) }
-            }
-            return alloc(vec);
-        };
-        let mut vec = ManuallyDrop::new(vec);
-        let arc_or_capa = ptr::without_provenance_mut::<()>(VEC_FLAG | (vec.capacity() << 1));
-        Self {
-            arc_or_capa: AtomicPtr::new(arc_or_capa),
-            base: MaybeUninit::new(base),
-            start: NonNull::new(vec.as_mut_ptr()).unwrap(),
-            length: vec.len(),
-        }
-    }
-
-    pub(crate) unsafe fn new_vec_with_offset(
-        start: NonNull<T>,
-        length: usize,
-        capacity: usize,
-        offset: usize,
-    ) -> Self {
-        if capacity == 0 && offset == 0 {
-            return Self::new_static(&[]);
-        }
-        let base_ptr = unsafe { start.as_ptr().sub(offset) };
-        let Some(base) = L::get_base(length == capacity, base_ptr) else {
-            #[cold]
-            fn alloc<T: Send + Sync + 'static, L: Layout>(
-                start: NonNull<T>,
-                length: usize,
-                capacity: usize,
-                offset: usize,
-            ) -> ArcSlice<T, L> {
-                let base_ptr = unsafe { start.as_ptr().sub(offset) };
-                let vec =
-                    unsafe { Vec::from_raw_parts(base_ptr, offset + length, offset + capacity) };
-                let (arc, _, _) = Arc::new(vec, (), 1);
-                unsafe { ArcSlice::from_arc(start, length, arc) }
-            }
-            return alloc(start, length, capacity, offset);
-        };
-        let arc_or_capa = ptr::without_provenance_mut::<()>(VEC_FLAG | ((offset + capacity) << 1));
-        Self {
-            arc_or_capa: AtomicPtr::new(arc_or_capa),
-            base: MaybeUninit::new(base),
             start,
             length,
-        }
-    }
-
-    /// # Safety
-    ///
-    /// `start` and `length` must represent a valid slice for the buffer contained in `arc`.
-    pub(crate) unsafe fn from_arc(start: NonNull<T>, length: usize, arc: Arc<T>) -> Self {
-        Self {
-            arc_or_capa: AtomicPtr::new(arc.into_ptr().as_ptr()),
-            base: MaybeUninit::uninit(),
-            start,
-            length,
+            data: ManuallyDrop::new(data),
         }
     }
 
     #[inline]
-    pub fn from_slice(slice: &[T]) -> Self
+    pub fn new(slice: &[T]) -> Self
     where
-        T: Clone,
+        T: Copy,
     {
-        slice.to_vec().into()
+        let (arc, start) = Arc::<T>::new(slice);
+        Self::new_impl(start, slice.len(), L::data_from_arc(arc))
     }
 
-    #[allow(unstable_name_collisions)]
-    unsafe fn rebuild_vec(&self, capacity: NonZero<usize>) -> Vec<T> {
-        let (ptr, len) = if let Some(base) = L::base_into_ptr(unsafe { self.base.assume_init() }) {
-            let len = unsafe { self.start.sub_ptr(base) } + self.length;
-            (base.as_ptr(), len)
-        } else {
-            let offset = capacity.get() - self.length;
-            let ptr = unsafe { self.start.as_ptr().sub(offset) };
-            (ptr, capacity.get())
-        };
-        unsafe { Vec::from_raw_parts(ptr, len, capacity.get()) }
+    fn new_array<const N: usize>(array: [T; N]) -> Self {
+        let (arc, start) = Arc::<T>::new_array(array);
+        Self::new_impl(start, N, L::data_from_arc(arc))
     }
 
-    #[allow(unstable_name_collisions)]
-    unsafe fn shift_vec(&self, mut vec: Vec<T>) -> Vec<T> {
-        unsafe {
-            let offset = self.start.as_ptr().sub_ptr(vec.as_mut_ptr());
-            vec.shift_left(offset, self.length)
-        };
-        vec
-    }
-
-    #[allow(clippy::incompatible_msrv)]
-    #[inline(always)]
-    fn inner(&self, arc_or_capa: *mut ()) -> Inner<T> {
-        let capacity = arc_or_capa.addr() >> VEC_CAPA_SHIFT;
-        match NonNull::new(arc_or_capa) {
-            Some(_) if arc_or_capa.addr() & VEC_FLAG != 0 => Inner::Vec {
-                capacity: unsafe { NonZero::new_unchecked(capacity) },
-            },
-            Some(arc) => Inner::Arc(ManuallyDrop::new(unsafe { Arc::from_ptr(arc) })),
-            None => Inner::Static,
-        }
-    }
-
-    #[inline(always)]
-    fn inner_mut(&mut self) -> Inner<T> {
-        let arc_or_capa = atomic_ptr_with_mut(&mut self.arc_or_capa, |ptr| *ptr);
-        self.inner(arc_or_capa)
+    fn new_empty(start: NonNull<T>, length: usize) -> Option<Self> {
+        let data = L::STATIC_DATA.filter(|_| length == 0)?;
+        Some(Self::new_impl(start, length, data))
     }
 
     #[inline]
@@ -273,41 +149,49 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[inline]
-    pub fn get_ref(&self, range: impl RangeBounds<usize>) -> ArcSliceRef<T, L> {
+    pub fn borrow(&self, range: impl RangeBounds<usize>) -> ArcSliceBorrow<T, L> {
         let (offset, len) = offset_len(self.length, range);
-        ArcSliceRef {
-            slice: &self[offset..offset + len],
-            arc_slice: self,
+        unsafe { self.borrow_impl(offset, len) }
+    }
+
+    #[inline]
+    pub fn borrow_from_ref(&self, subset: &[T]) -> ArcSliceBorrow<T, L> {
+        let (offset, len) =
+            offset_len_subslice(self, subset).unwrap_or_else(|| panic_out_of_range());
+        unsafe { self.borrow_impl(offset, len) }
+    }
+
+    pub(crate) unsafe fn borrow_impl(&self, offset: usize, len: usize) -> ArcSliceBorrow<T, L> {
+        ArcSliceBorrow {
+            slice: unsafe { self.get_unchecked(offset..offset + len) },
+            ptr: L::borrowed_data::<T>(&self.data).unwrap_or_else(|| ptr::from_ref(self).cast()),
+            _phantom: PhantomData,
         }
     }
 
     #[inline]
-    pub fn truncate(&mut self, len: usize) {
-        if len >= self.length {
-            return;
-        }
-        match self.inner_mut() {
-            Inner::Vec { .. } if !L::TRUNCATABLE => return unsafe { self.truncate_vec(len) },
-            Inner::Vec { .. } if mem::needs_drop::<T>() => unsafe {
-                let end = self.start.as_ptr().add(len);
-                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(end, self.len() - len));
-            },
-            _ => {}
-        }
-        self.length = len;
+    pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
+        let (offset, len) = offset_len(self.length, range);
+        unsafe { self.subslice_impl(offset, len) }
     }
 
-    #[cold]
-    unsafe fn truncate_vec(&mut self, len: usize) {
-        let Inner::Vec { capacity } = self.inner_mut() else {
-            unsafe { hint::unreachable_unchecked() }
-        };
-        let vec = unsafe { self.rebuild_vec(capacity) };
-        let (arc, _, _) = Arc::new(vec, (), 1);
-        atomic_ptr_with_mut(&mut self.arc_or_capa, |ptr| {
-            *ptr = arc.into_ptr().as_ptr();
-        });
-        self.length = len;
+    #[inline]
+    pub fn subslice_from_ref(&self, subset: &[T]) -> Self {
+        let (offset, len) =
+            offset_len_subslice(self, subset).unwrap_or_else(|| panic_out_of_range());
+        unsafe { self.subslice_impl(offset, len) }
+    }
+
+    #[allow(clippy::incompatible_msrv)]
+    pub(crate) unsafe fn subslice_impl(&self, offset: usize, len: usize) -> Self {
+        // MSRV if-let-chains
+        if let Some(empty) = Self::new_empty(unsafe { self.start.add(offset) }, len) {
+            return empty;
+        }
+        let mut clone = self.clone();
+        clone.start = unsafe { self.start.add(offset) };
+        clone.length = len;
+        clone
     }
 
     #[allow(clippy::incompatible_msrv)]
@@ -320,32 +204,12 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         self.length -= offset;
     }
 
-    #[allow(clippy::incompatible_msrv)]
-    pub(crate) unsafe fn subslice_impl(&self, offset: usize, len: usize) -> Self {
-        if len == 0 {
-            return Self {
-                arc_or_capa: AtomicPtr::new(ptr::null_mut()),
-                base: MaybeUninit::uninit(),
-                start: unsafe { self.start.add(offset) },
-                length: 0,
-            };
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.length {
+            L::truncate(self.start, self.length, &mut self.data);
+            self.length = len;
         }
-        let mut clone = self.clone();
-        clone.start = unsafe { self.start.add(offset) };
-        clone.length = len;
-        clone
-    }
-
-    #[inline]
-    pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
-        let (offset, len) = offset_len(self.length, range);
-        unsafe { self.subslice_impl(offset, len) }
-    }
-
-    #[inline]
-    pub fn subslice_from_ref(&self, subset: &[T]) -> Self {
-        let (offset, len) = offset_len_subslice(self, subset);
-        unsafe { self.subslice_impl(offset, len) }
     }
 
     #[allow(clippy::incompatible_msrv)]
@@ -385,177 +249,151 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[inline]
-    pub fn try_into_mut(mut self) -> Result<ArcSliceMut<T>, Self> {
-        let mut slice_mut = match self.inner_mut() {
-            Inner::Static => return Err(self),
-            Inner::Vec { capacity } => ArcSliceMut::new(unsafe { self.rebuild_vec(capacity) }),
-            Inner::Arc(mut arc) => match unsafe { arc.try_as_mut() } {
-                Some(s) => s,
-                None => return Err(self),
-            },
-        };
-        unsafe { slice_mut.set_start_len(self.start, self.length) };
-        mem::forget(self);
-        Ok(slice_mut)
-    }
-
-    #[inline]
-    pub fn into_vec(self) -> Vec<T>
-    where
-        T: Clone,
-    {
-        let mut this = ManuallyDrop::new(self);
-        match this.inner_mut() {
-            Inner::Static => this.as_slice().to_vec(),
-            Inner::Vec { capacity } => unsafe { this.shift_vec(this.rebuild_vec(capacity)) },
-            Inner::Arc(mut arc) => unsafe {
-                let mut vec = MaybeUninit::<Vec<T>>::uninit();
-                if !arc.take_buffer(this.length, NonNull::new(vec.as_mut_ptr()).unwrap()) {
-                    let vec = this.as_slice().to_vec();
-                    drop(ManuallyDrop::into_inner(arc));
-                    return vec;
-                }
-                this.shift_vec(vec.assume_init())
-            },
-        }
-    }
-
-    #[inline]
-    pub fn into_cow(mut self) -> Cow<'static, [T]>
-    where
-        T: Clone,
-    {
-        match self.inner_mut() {
-            Inner::Static => unsafe {
-                mem::transmute::<&[T], &'static [T]>(self.as_slice()).into()
-            },
-            _ => self.into_vec().into(),
-        }
-    }
-
-    #[inline]
-    pub fn get_metadata<M: Any>(&self) -> Option<&M> {
-        match self.inner(self.arc_or_capa.load(Ordering::Acquire)) {
-            Inner::Arc(arc) => arc.get_metadata(),
-            _ if is!(M, ()) => Some(unit_metadata()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn downcast_buffer<B: Buffer<T>>(mut self) -> Result<B, Self> {
-        let mut buffer = MaybeUninit::<B>::uninit();
-        match self.inner_mut() {
-            Inner::Static if is!(B, &'static [T]) => unsafe {
-                buffer.as_mut_ptr().cast::<&[T]>().write(self.as_slice());
-            },
-            Inner::Vec { capacity } if is!(B, Vec<T>) => unsafe {
-                let vec_ptr = buffer.as_mut_ptr().cast::<Vec<T>>();
-                vec_ptr.write(self.shift_vec(self.rebuild_vec(capacity)));
-            },
-            Inner::Arc(mut arc) => unsafe {
-                if !arc.take_buffer(self.length, NonNull::from(&mut buffer).cast::<B>()) {
-                    return Err(self);
-                }
-                if is!(B, Vec<T>) {
-                    let vec_ptr = buffer.as_mut_ptr().cast::<Vec<T>>();
-                    vec_ptr.write(self.shift_vec(vec_ptr.read()));
-                }
-            },
-            _ => return Err(self),
-        }
-        mem::forget(self);
-        Ok(unsafe { buffer.assume_init() })
+    pub fn try_into_mut(self) -> Result<ArcSliceMut<T>, Self> {
+        todo!()
     }
 
     #[inline]
     pub fn is_unique(&self) -> bool {
-        match self.inner(self.arc_or_capa.load(Ordering::Acquire)) {
-            Inner::Static => false,
-            Inner::Vec { .. } => true,
-            Inner::Arc(arc) => arc.is_unique(),
-        }
+        L::is_unique::<T>(&self.data)
+    }
+
+    #[inline]
+    pub fn metadata<M: Any>(&self) -> Option<&M> {
+        L::get_metadata::<T, M>(&self.data)
+    }
+
+    #[inline]
+    pub fn try_into_buffer<B: Buffer<T>>(self) -> Result<B, Self> {
+        let mut this = ManuallyDrop::new(self);
+        unsafe { L::take_buffer::<T, B>(this.start, this.length, &mut this.data) }
+            .ok_or_else(|| ManuallyDrop::into_inner(this))
     }
 
     #[inline]
     pub fn with_layout<L2: Layout>(self) -> ArcSlice<T, L2> {
         let mut this = ManuallyDrop::new(self);
-        let arc_or_capa = atomic_ptr_with_mut(&mut this.arc_or_capa, |ptr| *ptr);
-        match this.inner(arc_or_capa) {
-            Inner::Vec { capacity } => ArcSlice::new_vec(unsafe { this.rebuild_vec(capacity) }),
-            _ => ArcSlice {
-                arc_or_capa: arc_or_capa.into(),
-                base: MaybeUninit::uninit(),
-                start: this.start,
-                length: this.length,
-            },
+        let data = unsafe { ManuallyDrop::take(&mut this.data) };
+        ArcSlice {
+            start: this.start,
+            length: this.length,
+            data: ManuallyDrop::new(unsafe {
+                L::update_layout::<T, L2>(this.start, this.length, data)
+            }),
         }
     }
 
-    #[cold]
-    unsafe fn drop_vec(&mut self) {
-        let Inner::Vec { capacity } = self.inner_mut() else {
-            unsafe { hint::unreachable_unchecked() }
-        };
-        drop(unsafe { self.rebuild_vec(capacity) });
-    }
-
-    #[cold]
-    unsafe fn clone_vec(&self, arc_or_capa: *mut ()) -> Self {
-        let Inner::Vec { capacity } = self.inner(arc_or_capa) else {
-            unsafe { hint::unreachable_unchecked() }
-        };
-        let vec = unsafe { self.rebuild_vec(capacity) };
-        let (arc, _, _) = Arc::new(vec, (), 2);
-        let arc_ptr = arc.into_ptr();
-        // Release ordering must be used to ensure the arc vtable is visible
-        // by `get_metadata`. In case of failure, the read arc is cloned with
-        // a FAA, so there is no need of synchronization.
-        let arc = match self.arc_or_capa.compare_exchange(
-            arc_or_capa,
-            arc_ptr.as_ptr(),
-            Ordering::Release,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => unsafe { Arc::from_ptr(arc_ptr) },
-            Err(ptr) => {
-                unsafe { Arc::<T>::from_ptr(arc_ptr).forget_vec() };
-                let arc = unsafe { Arc::from_ptr(NonNull::new(ptr).unwrap_unchecked()) };
-                (*ManuallyDrop::new(arc)).clone()
-            }
-        };
-        unsafe { Self::from_arc(self.start, self.length, arc) }
+    pub fn drop_with_unique_hint(self) {
+        let mut this = ManuallyDrop::new(self);
+        unsafe { L::drop(this.start, this.length, &mut this.data, true) };
     }
 }
 
-unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSlice<T, L> {}
-unsafe impl<T: Send + Sync + 'static, L: Layout> Sync for ArcSlice<T, L> {}
+impl<T: Send + Sync + 'static, L: StaticLayout> ArcSlice<T, L> {
+    pub const fn new_static(slice: &'static [T]) -> Self {
+        let (start, length) = slice_into_raw_parts(slice);
+        Self {
+            start,
+            length,
+            data: ManuallyDrop::new(unsafe { L::STATIC_DATA_UNCHECKED.assume_init() }),
+        }
+    }
+}
+
+impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
+    pub(crate) fn from_buffer_impl<B: DynBuffer + Buffer<T>>(buffer: B) -> Self {
+        let (arc, start, length) = Arc::new_buffer(buffer);
+        Self {
+            start,
+            length,
+            data: ManuallyDrop::new(L::data_from_arc(arc)),
+        }
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    fn from_raw_buffer_impl<B: DynBuffer + RawBuffer<T>>(buffer: B) -> Self {
+        let ptr = buffer.into_raw();
+        if let Some(data) = L::data_from_raw_buffer::<T, B>(ptr) {
+            let buffer = ManuallyDrop::new(unsafe { B::from_raw(ptr) });
+            let (start, length) = slice_into_raw_parts(buffer.as_slice());
+            return Self {
+                start,
+                length,
+                data: ManuallyDrop::new(data),
+            };
+        }
+        Self::from_buffer_impl(unsafe { B::from_raw(ptr) })
+    }
+
+    #[inline]
+    pub fn from_buffer<B: Buffer<T>>(buffer: B) -> Self {
+        Self::from_buffer_with_metadata(buffer, ())
+    }
+
+    #[inline]
+    pub fn from_buffer_with_metadata<B: Buffer<T>, M: Send + Sync + 'static>(
+        buffer: B,
+        metadata: M,
+    ) -> Self {
+        if is!(M, ()) {
+            return B::into_arc_slice(buffer);
+        }
+        Self::from_buffer_impl(BufferWithMetadata::new(buffer, metadata))
+    }
+
+    #[inline]
+    pub fn from_buffer_with_borrowed_metadata<B: Buffer<T> + BorrowMetadata>(buffer: B) -> Self {
+        Self::from_buffer_impl(buffer)
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    #[inline]
+    pub fn from_raw_buffer<B: RawBuffer<T>>(buffer: B) -> Self {
+        Self::from_raw_buffer_impl(BufferWithMetadata::new(buffer, ()))
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    #[inline]
+    pub fn from_raw_buffer_and_borrowed_metadata<B: RawBuffer<T> + BorrowMetadata>(
+        buffer: B,
+    ) -> Self {
+        Self::from_buffer_impl(buffer)
+    }
+
+    pub(crate) fn from_static(slice: &'static [T]) -> Self {
+        match L::STATIC_DATA {
+            Some(data) => Self {
+                start: NonNull::new(slice.as_ptr().cast_mut()).unwrap(),
+                length: slice.len(),
+                data: ManuallyDrop::new(data),
+            },
+            None => Self::from_buffer_impl(BufferWithMetadata::new(slice, ())),
+        }
+    }
+
+    pub(crate) fn from_vec(mut vec: Vec<T>) -> Self {
+        Self {
+            start: NonNull::new(vec.as_mut_ptr()).unwrap(),
+            length: vec.len(),
+            data: ManuallyDrop::new(L::data_from_vec(vec)),
+        }
+    }
+}
 
 impl<T: Send + Sync + 'static, L: Layout> Drop for ArcSlice<T, L> {
     #[inline]
     fn drop(&mut self) {
-        match self.inner_mut() {
-            Inner::Static => {}
-            Inner::Vec { .. } => unsafe { self.drop_vec() },
-            Inner::Arc(arc) => drop(ManuallyDrop::into_inner(arc)),
-        }
+        unsafe { L::drop(self.start, self.length, &mut self.data, false) };
     }
 }
 
 impl<T: Send + Sync + 'static, L: Layout> Clone for ArcSlice<T, L> {
     #[inline]
     fn clone(&self) -> Self {
-        let arc_or_capa = self.arc_or_capa.load(Ordering::Acquire);
-        match self.inner(arc_or_capa) {
-            Inner::Static => {}
-            Inner::Vec { .. } => return unsafe { self.clone_vec(arc_or_capa) },
-            Inner::Arc(arc) => mem::forget((*arc).clone()),
-        };
         Self {
-            arc_or_capa: AtomicPtr::new(arc_or_capa),
-            base: MaybeUninit::uninit(),
             start: self.start,
             length: self.length,
+            data: ManuallyDrop::new(L::clone(self.start, self.length, &self.data)),
         }
     }
 }
@@ -593,8 +431,7 @@ impl<T: Send + Sync + 'static, L: Layout> Borrow<[T]> for ArcSlice<T, L> {
     }
 }
 
-#[cfg(not(all(loom, test)))]
-impl<T: Send + Sync + 'static, L: Layout> Default for ArcSlice<T, L> {
+impl<T: Send + Sync + 'static, L: StaticLayout> Default for ArcSlice<T, L> {
     #[inline]
     fn default() -> Self {
         Self::new_static(&[])
@@ -609,19 +446,13 @@ impl<T: fmt::Debug + Send + Sync + 'static, L: Layout> fmt::Debug for ArcSlice<T
 
 impl<L: Layout> fmt::LowerHex for ArcSlice<u8, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02x}", b)?;
-        }
-        Ok(())
+        lower_hex(self, f)
     }
 }
 
 impl<L: Layout> fmt::UpperHex for ArcSlice<u8, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02X}", b)?;
-        }
-        Ok(())
+        upper_hex(self, f)
     }
 }
 
@@ -701,59 +532,36 @@ where
     }
 }
 
-impl<T: Send + Sync + 'static> From<ArcSlice<T, Compact>> for ArcSlice<T, Plain> {
-    fn from(value: ArcSlice<T, Compact>) -> Self {
-        value.with_layout()
+impl<T: Send + Sync + 'static, L: AnyBufferLayout> From<Box<[T]>> for ArcSlice<T, L> {
+    fn from(value: Box<[T]>) -> Self {
+        Self::from_vec(value.into())
     }
 }
 
-impl<T: Send + Sync + 'static> From<ArcSlice<T, Plain>> for ArcSlice<T, Compact> {
-    fn from(value: ArcSlice<T, Plain>) -> Self {
-        value.with_layout()
-    }
-}
-
-macro_rules! std_impl {
-    ($($(@$N:ident)? $ty:ty $(: $bound:path)?),*) => {$(
-        impl<T: $($bound +)? Send + Sync + 'static, L: Layout, $(const $N: usize,)?> From<$ty> for ArcSlice<T, L> {
-
-            #[inline]
-            fn from(value: $ty) -> Self {
-                Self::new(value)
-            }
-        }
-    )*};
-}
-std_impl!(&'static [T], @N &'static [T; N], @N [T; N], Box<[T]>, Cow<'static, [T]>: Clone);
-
-// Temporary impl until the compiler regression is fixed
-impl<T: Send + Sync + 'static, L: Layout> From<Vec<T>> for ArcSlice<T, L> {
+impl<T: Send + Sync + 'static, L: AnyBufferLayout> From<Vec<T>> for ArcSlice<T, L> {
     fn from(value: Vec<T>) -> Self {
-        Self::new_vec(value)
+        Self::from_vec(value)
     }
 }
 
-impl<T: Clone + Send + Sync + 'static, L: Layout> From<ArcSlice<T, L>> for Vec<T> {
+impl<T: Send + Sync + 'static, L: Layout, const N: usize> From<[T; N]> for ArcSlice<T, L> {
     #[inline]
-    fn from(value: ArcSlice<T, L>) -> Self {
-        value.into_vec()
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static, L: Layout> From<ArcSlice<T, L>> for Cow<'static, [T]> {
-    #[inline]
-    fn from(value: ArcSlice<T, L>) -> Self {
-        value.into_cow()
+    fn from(value: [T; N]) -> Self {
+        Self::new_array(value)
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct ArcSliceRef<'a, T: Send + Sync + 'static, L: Layout = Compact> {
+pub struct ArcSliceBorrow<'a, T: Send + Sync + 'static, L: Layout = DefaultLayout> {
     slice: &'a [T],
-    arc_slice: &'a ArcSlice<T, L>,
+    ptr: *const (),
+    _phantom: PhantomData<&'a ArcSlice<T, L>>,
 }
 
-impl<T: Send + Sync + 'static, L: Layout> Deref for ArcSliceRef<'_, T, L> {
+unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSliceBorrow<'_, T, L> {}
+unsafe impl<T: Send + Sync + 'static, L: Layout> Sync for ArcSliceBorrow<'_, T, L> {}
+
+impl<T: Send + Sync + 'static, L: Layout> Deref for ArcSliceBorrow<'_, T, L> {
     type Target = [T];
 
     #[inline]
@@ -762,16 +570,28 @@ impl<T: Send + Sync + 'static, L: Layout> Deref for ArcSliceRef<'_, T, L> {
     }
 }
 
-impl<T: fmt::Debug + Send + Sync + 'static, L: Layout> fmt::Debug for ArcSliceRef<'_, T, L> {
+impl<T: fmt::Debug + Send + Sync + 'static, L: Layout> fmt::Debug for ArcSliceBorrow<'_, T, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         (**self).fmt(f)
     }
 }
 
-impl<T: Send + Sync + 'static, L: Layout> ArcSliceRef<'_, T, L> {
+impl<T: Send + Sync + 'static, L: Layout> ArcSliceBorrow<'_, T, L> {
     #[inline]
-    pub fn into_arc(self) -> ArcSlice<T, L> {
-        let (offset, len) = unsafe { offset_len_subslice_unchecked(self.arc_slice, self.slice) };
-        unsafe { self.arc_slice.subslice_impl(offset, len) }
+    pub fn to_owned(self) -> ArcSlice<T, L> {
+        // MSRV if-let-chains
+        let (start, length) = slice_into_raw_parts(self.slice);
+        if let Some(empty) = ArcSlice::new_empty(start, length) {
+            return empty;
+        }
+        let data = L::clone_borrowed_data::<T>(self.ptr).unwrap_or_else(|| {
+            let arc_slice = unsafe { &*self.ptr.cast::<ArcSlice<T, L>>() };
+            L::clone(arc_slice.start, arc_slice.length, &arc_slice.data)
+        });
+        ArcSlice {
+            start,
+            length,
+            data: ManuallyDrop::new(data),
+        }
     }
 }

@@ -17,10 +17,10 @@ use either::Either;
 
 use crate::{
     buffer::{Buffer, StringBuffer},
-    layout::{Compact, Layout, Plain},
+    layout::{BoxedSliceLayout, DefaultLayout, Layout, OptimizedLayout, RawLayout, VecLayout},
     msrv::ptr,
     str::{check_char_boundary, FromUtf8Error, StringBufWrapper},
-    utils::{debug_slice, offset_len, panic_out_of_range},
+    utils::{debug_slice, lower_hex, offset_len, panic_out_of_range, upper_hex},
     ArcBytes, ArcStr,
 };
 
@@ -32,23 +32,37 @@ pub trait InlinedLayout {
     const DEFAULT: Self::Data;
 }
 
-const COMPACT_LEN: usize = 3 * size_of::<usize>() - 2;
-const PLAIN_LEN: usize = 4 * size_of::<usize>() - 2;
+const _3_WORDS_LEN: usize = 3 * size_of::<usize>() - 2;
+const _4_WORDS_LEN: usize = 4 * size_of::<usize>() - 2;
 
-impl InlinedLayout for Compact {
-    const LEN: usize = COMPACT_LEN;
-    type Data = [MaybeUninit<u8>; COMPACT_LEN];
-    const DEFAULT: Self::Data = [MaybeUninit::uninit(); COMPACT_LEN];
+impl<const ANY_BUFFER: bool, const STATIC: bool> InlinedLayout
+    for OptimizedLayout<ANY_BUFFER, STATIC>
+{
+    const LEN: usize = _3_WORDS_LEN;
+    type Data = [MaybeUninit<u8>; _3_WORDS_LEN];
+    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
 }
 
-impl InlinedLayout for Plain {
-    const LEN: usize = PLAIN_LEN;
-    type Data = [MaybeUninit<u8>; PLAIN_LEN];
-    const DEFAULT: Self::Data = [MaybeUninit::uninit(); PLAIN_LEN];
+impl InlinedLayout for BoxedSliceLayout {
+    const LEN: usize = _3_WORDS_LEN;
+    type Data = [MaybeUninit<u8>; _3_WORDS_LEN];
+    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
+}
+
+impl InlinedLayout for VecLayout {
+    const LEN: usize = _4_WORDS_LEN;
+    type Data = [MaybeUninit<u8>; _4_WORDS_LEN];
+    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
+}
+
+impl<const BOXED_SLICE: bool> InlinedLayout for RawLayout<BOXED_SLICE> {
+    const LEN: usize = _4_WORDS_LEN;
+    type Data = [MaybeUninit<u8>; _4_WORDS_LEN];
+    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
 }
 
 #[repr(C)]
-pub struct SmallBytes<L: Layout> {
+pub struct SmallBytes<L: Layout = DefaultLayout> {
     #[cfg(target_endian = "big")]
     tagged_length: u8,
     data: <L as InlinedLayout>::Data,
@@ -180,19 +194,13 @@ impl<L: Layout> fmt::Debug for SmallBytes<L> {
 
 impl<L: Layout> fmt::LowerHex for SmallBytes<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02x}", b)?;
-        }
-        Ok(())
+        lower_hex(self, f)
     }
 }
 
 impl<L: Layout> fmt::UpperHex for SmallBytes<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02X}", b)?;
-        }
-        Ok(())
+        upper_hex(self, f)
     }
 }
 
@@ -216,7 +224,7 @@ impl<L: Layout> Ord for SmallBytes<L> {
     }
 }
 
-pub struct SmallArcBytes<L: Layout = Compact>(Inner<L>);
+pub struct SmallArcBytes<L: Layout = DefaultLayout>(Inner<L>);
 
 #[repr(C)]
 union Inner<L: Layout> {
@@ -387,19 +395,13 @@ impl<L: Layout> fmt::Debug for SmallArcBytes<L> {
 
 impl<L: Layout> fmt::LowerHex for SmallArcBytes<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02x}", b)?;
-        }
-        Ok(())
+        lower_hex(self, f)
     }
 }
 
 impl<L: Layout> fmt::UpperHex for SmallArcBytes<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &b in self.as_slice() {
-            write!(f, "{:02X}", b)?;
-        }
-        Ok(())
+        upper_hex(self, f)
     }
 }
 
@@ -462,7 +464,7 @@ impl<L: Layout> From<ArcBytes<L>> for SmallArcBytes<L> {
     }
 }
 
-pub struct SmallStr<L: Layout = Compact>(SmallBytes<L>);
+pub struct SmallStr<L: Layout = DefaultLayout>(SmallBytes<L>);
 
 impl<L: Layout> SmallStr<L> {
     #[inline]
@@ -612,7 +614,7 @@ impl<L: Layout> Ord for SmallStr<L> {
     }
 }
 
-pub struct SmallArcStr<L: Layout = Compact>(SmallArcBytes<L>);
+pub struct SmallArcStr<L: Layout = DefaultLayout>(SmallArcBytes<L>);
 
 impl<L: Layout> SmallArcStr<L> {
     #[inline]

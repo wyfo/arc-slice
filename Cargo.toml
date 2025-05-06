@@ -2,7 +2,7 @@
 name = "arc-slice"
 version = "0.1.0-alpha.2"
 edition = "2021"
-rust-version = "1.65.0"
+rust-version = "1.74.0"
 exclude = [".*"]
 description = "Shared memory slices"
 homepage = "https://github.com/wyfo/arc-slice"
@@ -22,12 +22,25 @@ repository = "https://github.com/wyfo/arc-slice"
 [features]
 default = ["std"]
 inlined = ["dep:either"]
-std = []
+abort-on-refcount-overflow = []
+portable-atomic-util = ["portable-atomic", "dep:portable-atomic-util"]
+raw-buffer = []
+std = ["abort-on-refcount-overflow"]
+# default layout
+default-layout-any-buffer = []
+default-layout-static = []
+default-layout-boxed-slice = []
+default-layout-raw = ["raw-buffer"]
+default-layout-vec = []
+default-layout-mut-any-buffer = []
+default-layout-mut-vec = []
 
 [dependencies]
 bytes = { version = "1", optional = true }
+cfg-if = "1"
 either = { version = "1", optional = true }
-portable-atomic = { version = "1", optional = true }
+portable-atomic = { version = "1", default-features = false, optional = true }
+portable-atomic-util = { version = "0.2", default-features = false, features = ["alloc"], optional = true }
 serde = { version = "1", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
@@ -35,9 +48,6 @@ bytes = "1.10.1"
 criterion = "0.5.1"
 iai-callgrind = "0.14.0"
 shared_memory = "0.12.4"
-
-[target.'cfg(loom)'.dev-dependencies]
-loom = { version = "0.7", features = ["checkpoint"] }
 
 [[bench]]
 name = "criterion"
@@ -51,7 +61,6 @@ harness = false
 unsafe_op_in_unsafe_fn = "forbid"
 #missing_docs = "deny"
 missing_debug_implementations = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [lints.clippy]
 dbg_macro = "forbid"

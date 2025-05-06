@@ -12,18 +12,23 @@ use core::{
 };
 
 use crate::{
-    buffer::{BorrowMetadata, Buffer, StringBuffer},
-    layout::{Compact, Layout, Plain},
+    buffer::{BorrowMetadata, Buffer, RawBuffer, RawStringBuffer, StringBuffer},
+    layout::{DefaultLayout, Layout},
     macros::is,
     utils::offset_len,
     ArcBytes, ArcBytesRef,
 };
 
+#[derive(Clone)]
 pub(crate) struct StringBufWrapper<B>(pub(crate) B);
 
 impl<B: StringBuffer> Buffer<u8> for StringBufWrapper<B> {
     fn as_slice(&self) -> &[u8] {
         self.0.as_str().as_bytes()
+    }
+
+    fn is_unique(&self) -> bool {
+        self.0.is_unique()
     }
 
     fn try_into_static(self) -> Result<&'static [u8], Self>
@@ -44,6 +49,16 @@ impl<B: StringBuffer> Buffer<u8> for StringBufWrapper<B> {
     }
 }
 
+unsafe impl<B: RawStringBuffer> RawBuffer<u8> for StringBufWrapper<B> {
+    fn into_raw(self) -> *mut () {
+        self.0.into_raw()
+    }
+
+    unsafe fn from_raw(ptr: *mut ()) -> Self {
+        Self(unsafe { B::from_raw(ptr) })
+    }
+}
+
 impl<B: BorrowMetadata> BorrowMetadata for StringBufWrapper<B> {
     type Metadata = B::Metadata;
 
@@ -52,7 +67,7 @@ impl<B: BorrowMetadata> BorrowMetadata for StringBufWrapper<B> {
     }
 }
 
-pub struct ArcStr<L: Layout = Compact>(ArcBytes<L>);
+pub struct ArcStr<L: Layout = DefaultLayout>(ArcBytes<L>);
 
 impl<L: Layout> ArcStr<L> {
     #[inline]
@@ -72,13 +87,13 @@ impl<L: Layout> ArcStr<L> {
         metadata: M,
     ) -> Self {
         let buffer = StringBufWrapper(buffer);
-        unsafe { Self::from_utf8_unchecked(ArcBytes::with_metadata(buffer, metadata)) }
+        unsafe { Self::from_utf8_unchecked(ArcBytes::with_buffer_and_metadata(buffer, metadata)) }
     }
 
     #[inline]
     pub fn with_borrowed_metadata<B: StringBuffer + BorrowMetadata>(buffer: B) -> Self {
         let buffer = StringBufWrapper(buffer);
-        unsafe { Self::from_utf8_unchecked(ArcBytes::with_borrowed_metadata(buffer)) }
+        unsafe { Self::from_utf8_unchecked(ArcBytes::with_buffer_and_borrowed_metadata(buffer)) }
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -173,8 +188,8 @@ impl<L: Layout> ArcStr<L> {
     }
 
     #[inline]
-    pub fn get_metadata<M: Any>(&self) -> Option<&M> {
-        self.0.get_metadata()
+    pub fn metadata<M: Any>(&self) -> Option<&M> {
+        self.0.metadata()
     }
 
     #[inline]
@@ -262,7 +277,6 @@ impl<L: Layout> Clone for ArcStr<L> {
     }
 }
 
-#[cfg(not(all(loom, test)))]
 impl<L: Layout> Default for ArcStr<L> {
     #[inline]
     fn default() -> Self {
@@ -341,18 +355,6 @@ where
     }
 }
 
-impl From<ArcStr<Compact>> for ArcStr<Plain> {
-    fn from(value: ArcStr<Compact>) -> Self {
-        value.with_layout()
-    }
-}
-
-impl From<ArcStr<Plain>> for ArcStr<Compact> {
-    fn from(value: ArcStr<Plain>) -> Self {
-        value.with_layout()
-    }
-}
-
 macro_rules! std_impl {
     ($($ty:ty),*) => {$(
         impl<L: Layout> From<$ty> for ArcStr<L> {
@@ -406,7 +408,7 @@ impl<L: Layout> From<ArcStr<L>> for ArcBytes<L> {
 }
 
 #[derive(Clone, Copy)]
-pub struct ArcStrRef<'a, L: Layout = Compact>(ArcBytesRef<'a, L>);
+pub struct ArcStrRef<'a, L: Layout = DefaultLayout>(ArcBytesRef<'a, L>);
 
 impl<L: Layout> Deref for ArcStrRef<'_, L> {
     type Target = str;

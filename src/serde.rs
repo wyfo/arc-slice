@@ -1,12 +1,12 @@
 use alloc::{string::String, vec::Vec};
-use core::{cmp, fmt, marker::PhantomData, mem};
+use core::{cmp, fmt, marker::PhantomData};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     layout::Layout,
-    macros::{is, is_not},
-    utils::transmute_slice,
+    macros::is,
+    utils::{try_transmute, try_transmute_slice},
     ArcSlice, ArcSliceMut, ArcStr,
 };
 
@@ -17,7 +17,7 @@ where
     T: Serialize + Send + Sync + 'static,
     S: Serializer,
 {
-    match transmute_slice(slice) {
+    match try_transmute_slice(slice) {
         Some(b) => serializer.serialize_bytes(b),
         None => serializer.collect_seq(slice),
     }
@@ -65,7 +65,7 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From
     where
         E: de::Error,
     {
-        match transmute_slice(v) {
+        match try_transmute_slice(v) {
             Some([]) => Ok(S::default()),
             Some(s) => Ok(s.to_vec().into()),
             None => Err(de::Error::invalid_type(de::Unexpected::Bytes(v), &self)),
@@ -76,10 +76,10 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From
     where
         E: de::Error,
     {
-        if is_not!(T, u8) {
-            return Err(de::Error::invalid_type(de::Unexpected::Bytes(&v), &self));
+        match try_transmute::<_, Vec<T>>(v) {
+            Ok(v) => Ok(v.into()),
+            Err(_) => Err(de::Error::invalid_type(de::Unexpected::Bytes(v), &self)),
         }
-        Ok(unsafe { mem::transmute::<Vec<u8>, Vec<T>>(v) }.into())
     }
 
     fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>

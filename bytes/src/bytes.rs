@@ -18,8 +18,11 @@ impl<T: AsRef<[u8]> + Send + 'static> Buffer<u8> for Owner<T> {
     fn as_slice(&self) -> &[u8] {
         self.0.as_ref()
     }
+
+    fn is_unique(&self) -> bool {
+        false
+    }
 }
-struct OwnerMetadata;
 
 impl Bytes {
     pub fn new() -> Self {
@@ -34,7 +37,7 @@ impl Bytes {
     where
         T: AsRef<[u8]> + Send + 'static,
     {
-        Self(ArcBytes::with_metadata(Owner(owner), OwnerMetadata))
+        Self(ArcBytes::from_buffer(Owner(owner)))
     }
 
     pub const fn len(&self) -> usize {
@@ -46,11 +49,11 @@ impl Bytes {
     }
 
     pub fn is_unique(&self) -> bool {
-        self.0.is_unique() && self.0.get_metadata::<OwnerMetadata>().is_none()
+        self.0.is_unique()
     }
 
     pub fn copy_from_slice(data: &[u8]) -> Self {
-        Self(ArcBytes::from_slice(data))
+        Self(ArcBytes::new(data))
     }
 
     pub fn slice(&self, range: impl RangeBounds<usize>) -> Self {
