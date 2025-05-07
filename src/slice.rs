@@ -125,7 +125,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         Self::new_impl(start, slice.len(), L::data_from_arc(arc))
     }
 
-    fn new_array<const N: usize>(array: [T; N]) -> Self {
+    pub(crate) fn new_array<const N: usize>(array: [T; N]) -> Self {
         let (arc, start) = Arc::<T>::new_array(array);
         Self::new_impl(start, N, L::data_from_arc(arc))
     }

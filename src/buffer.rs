@@ -101,6 +101,14 @@ impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for [T; N] {
     }
 
     #[doc(hidden)]
+    fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L>
+    where
+        T: Send + Sync + 'static,
+    {
+        ArcSlice::new_array(self)
+    }
+
+    #[doc(hidden)]
     #[inline(always)]
     unsafe fn try_from_array(array: ArrayPtr<T>) -> Option<Self> {
         (array.0.len() == N).then(|| unsafe { ptr::read(array.0.cast()) })
