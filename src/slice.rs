@@ -39,9 +39,15 @@ pub trait ArcSliceLayout: 'static {
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::uninit();
     fn data_from_arc<T>(arc: Arc<T>) -> Self::Data;
     fn data_from_static<T: Send + Sync + 'static>(slice: &'static [T]) -> Self::Data {
-        Self::STATIC_DATA.unwrap_or_else(|| {
+        if let Some(data) = Self::STATIC_DATA {
+            data
+        } else if slice.len() == 0 {
+            // it doesn't matter if the start pointer doesn't correspond anymore,
+            // as the slice is empty
+            Self::data_from_arc(Arc::<T>::new_array([]).0)
+        } else {
             Self::data_from_arc(Arc::new_buffer(BufferWithMetadata::new(slice, ())).0)
-        })
+        }
     }
     fn data_from_vec<T: Send + Sync + 'static>(vec: Vec<T>) -> Self::Data;
     fn data_from_raw_buffer<T, B: DynBuffer + Buffer<T>>(_buffer: *const ()) -> Option<Self::Data> {
