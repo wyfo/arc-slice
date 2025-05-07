@@ -22,7 +22,6 @@ use crate::{
     buffer::{BorrowMetadata, Buffer, BufferWithMetadata, DynBuffer},
     layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, StaticLayout},
     macros::is,
-    slice_mut::ArcSliceMut,
     utils::{
         debug_slice, lower_hex, offset_len, offset_len_subslice, panic_out_of_range,
         slice_into_raw_parts, upper_hex,
@@ -108,7 +107,7 @@ unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSlice<T, L> {}
 unsafe impl<T: Send + Sync + 'static, L: Layout> Sync for ArcSlice<T, L> {}
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
-    fn new_impl(start: NonNull<T>, length: usize, data: <L as ArcSliceLayout>::Data) -> Self {
+    const fn new_impl(start: NonNull<T>, length: usize, data: <L as ArcSliceLayout>::Data) -> Self {
         Self {
             start,
             length,
@@ -121,11 +120,18 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     where
         T: Copy,
     {
+        let (start, length) = slice_into_raw_parts(slice);
+        if let Some(empty) = ArcSlice::new_empty(start, length) {
+            return empty;
+        }
         let (arc, start) = Arc::<T>::new(slice);
         Self::new_impl(start, slice.len(), L::data_from_arc(arc))
     }
 
     pub(crate) fn new_array<const N: usize>(array: [T; N]) -> Self {
+        if let Some(empty) = Self::new_empty(NonNull::dangling(), N) {
+            return empty;
+        }
         let (arc, start) = Arc::<T>::new_array(array);
         Self::new_impl(start, N, L::data_from_arc(arc))
     }
@@ -197,12 +203,12 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     pub(crate) unsafe fn subslice_impl(&self, offset: usize, len: usize) -> Self {
-        // MSRV if-let-chains
-        if let Some(empty) = Self::new_empty(unsafe { self.start.add(offset) }, len) {
+        let start = unsafe { self.start.add(offset) };
+        if let Some(empty) = Self::new_empty(start, len) {
             return empty;
         }
         let mut clone = self.clone();
-        clone.start = unsafe { self.start.add(offset) };
+        clone.start = start;
         clone.length = len;
         clone
     }
@@ -258,10 +264,10 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         clone
     }
 
-    #[inline]
-    pub fn try_into_mut(self) -> Result<ArcSliceMut<T>, Self> {
-        todo!()
-    }
+    // #[inline]
+    // pub fn try_into_mut(self) -> Result<ArcSliceMut<T>, Self> {
+    //     todo!()
+    // }
 
     #[inline]
     pub fn is_unique(&self) -> bool {
@@ -302,22 +308,15 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
 impl<T: Send + Sync + 'static, L: StaticLayout> ArcSlice<T, L> {
     pub const fn new_static(slice: &'static [T]) -> Self {
         let (start, length) = slice_into_raw_parts(slice);
-        Self {
-            start,
-            length,
-            data: ManuallyDrop::new(unsafe { L::STATIC_DATA_UNCHECKED.assume_init() }),
-        }
+        let data = unsafe { L::STATIC_DATA_UNCHECKED.assume_init() };
+        Self::new_impl(start, length, data)
     }
 }
 
 impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
     pub(crate) fn from_buffer_impl<B: DynBuffer + Buffer<T>>(buffer: B) -> Self {
         let (arc, start, length) = Arc::new_buffer(buffer);
-        Self {
-            start,
-            length,
-            data: ManuallyDrop::new(L::data_from_arc(arc)),
-        }
+        Self::new_impl(start, length, L::data_from_arc(arc))
     }
 
     #[cfg(feature = "raw-buffer")]
@@ -326,11 +325,7 @@ impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
         if let Some(data) = L::data_from_raw_buffer::<T, B>(ptr) {
             let buffer = ManuallyDrop::new(unsafe { B::from_raw(ptr) });
             let (start, length) = slice_into_raw_parts(buffer.as_slice());
-            return Self {
-                start,
-                length,
-                data: ManuallyDrop::new(data),
-            };
+            return Self::new_impl(start, length, data);
         }
         Self::from_buffer_impl(unsafe { B::from_raw(ptr) })
     }
@@ -371,22 +366,19 @@ impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
     }
 
     pub(crate) fn from_static(slice: &'static [T]) -> Self {
+        let (start, length) = slice_into_raw_parts(slice);
         match L::STATIC_DATA {
-            Some(data) => Self {
-                start: NonNull::new(slice.as_ptr().cast_mut()).unwrap(),
-                length: slice.len(),
-                data: ManuallyDrop::new(data),
-            },
+            Some(data) => Self::new_impl(start, length, data),
             None => Self::from_buffer_impl(BufferWithMetadata::new(slice, ())),
         }
     }
 
-    pub(crate) fn from_vec(mut vec: Vec<T>) -> Self {
-        Self {
-            start: NonNull::new(vec.as_mut_ptr()).unwrap(),
-            length: vec.len(),
-            data: ManuallyDrop::new(L::data_from_vec(vec)),
+    pub(crate) fn from_vec(vec: Vec<T>) -> Self {
+        if vec.is_empty() {
+            return Self::new_array([]);
         }
+        let (start, length) = slice_into_raw_parts(&vec);
+        Self::new_impl(start, length, L::data_from_vec(vec))
     }
 }
 
@@ -400,11 +392,8 @@ impl<T: Send + Sync + 'static, L: Layout> Drop for ArcSlice<T, L> {
 impl<T: Send + Sync + 'static, L: Layout> Clone for ArcSlice<T, L> {
     #[inline]
     fn clone(&self) -> Self {
-        Self {
-            start: self.start,
-            length: self.length,
-            data: ManuallyDrop::new(L::clone(self.start, self.length, &self.data)),
-        }
+        let data = L::clone(self.start, self.length, &self.data);
+        Self::new_impl(self.start, self.length, data)
     }
 }
 
@@ -589,7 +578,6 @@ impl<T: fmt::Debug + Send + Sync + 'static, L: Layout> fmt::Debug for ArcSliceBo
 impl<T: Send + Sync + 'static, L: Layout> ArcSliceBorrow<'_, T, L> {
     #[inline]
     pub fn to_owned(self) -> ArcSlice<T, L> {
-        // MSRV if-let-chains
         let (start, length) = slice_into_raw_parts(self.slice);
         if let Some(empty) = ArcSlice::new_empty(start, length) {
             return empty;

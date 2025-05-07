@@ -21,7 +21,7 @@ use crate::{
     atomic::AtomicUsize,
     buffer::{ArrayPtr, Buffer, BufferMut, BufferMutExt, BufferWithMetadata, DynBuffer},
     macros::is,
-    msrv::{ptr, BoxExt, SubPtrExt},
+    msrv::{ptr, BoxExt, NonZero, SubPtrExt},
     utils::slice_into_raw_parts,
 };
 
@@ -45,7 +45,7 @@ type FullVec<T> = BufferWithMetadata<Vec<T>, ()>;
 
 struct CompactVec<T> {
     start: NonNull<T>,
-    capacity: usize,
+    capacity: NonZero<usize>,
 }
 
 impl<T> CompactVec<T> {
@@ -65,19 +65,26 @@ impl<T> CompactVec<T> {
         T: Send + Sync + 'static,
     {
         let vec = &unsafe { arc.cast::<ArcInner<Self>>().as_ref() }.buffer;
+        let capacity = vec.capacity.get();
         if is!({ type_id }, Vec<T>) {
             let offset = unsafe { start.cast().sub_ptr(vec.start) };
             let mut vec =
-                unsafe { Vec::from_raw_parts(vec.start.as_ptr(), offset + length, vec.capacity) };
+                unsafe { Vec::from_raw_parts(vec.start.as_ptr(), offset + length, capacity) };
             unsafe { vec.shift_left(offset, length) };
             unsafe { buffer.cast().write(vec) };
             return Some(buffer);
-        } else if is!({ type_id }, Box<[T]>) && length == vec.capacity {
-            let slice = ptr::slice_from_raw_parts_mut(vec.start.as_ptr(), vec.capacity);
+        } else if is!({ type_id }, Box<[T]>) && length == capacity {
+            let slice = ptr::slice_from_raw_parts_mut(vec.start.as_ptr(), capacity);
             unsafe { buffer.cast().write(Box::from_raw(slice)) };
             return Some(buffer);
         }
         None
+    }
+}
+
+impl<T> Drop for CompactVec<T> {
+    fn drop(&mut self) {
+        drop(unsafe { Vec::from_raw_parts(self.start.as_ptr(), 0, self.capacity.get()) });
     }
 }
 
@@ -88,7 +95,7 @@ impl<T> From<Vec<T>> for CompactVec<T> {
 
         CompactVec {
             start: NonNull::new(vec.as_mut_ptr()).unwrap(),
-            capacity: vec.capacity(),
+            capacity: unsafe { NonZero::new_unchecked(vec.capacity()) },
         }
     }
 }
