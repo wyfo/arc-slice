@@ -21,7 +21,7 @@ use crate::{
     ArcBytes, ArcBytesBorrow,
 };
 
-pub struct ArcStr<L: Layout = DefaultLayout>(ArcBytes<L>);
+pub struct ArcStr<L: Layout = DefaultLayout>(pub(crate) ArcBytes<L>);
 
 impl<L: Layout> ArcStr<L> {
     #[inline]
@@ -66,8 +66,9 @@ impl<L: Layout> ArcStr<L> {
         self.0.is_empty()
     }
 
+    #[inline]
     pub const fn as_ptr(&self) -> *const u8 {
-        self.0.as_ptr()
+        self.0.start.as_ptr()
     }
 
     #[cfg(feature = "const-slice")]

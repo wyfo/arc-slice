@@ -90,7 +90,7 @@ pub trait ArcSliceLayout: 'static {
 pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
     pub(crate) start: NonNull<T>,
     pub(crate) length: usize,
-    data: ManuallyDrop<L::Data>,
+    data: ManuallyDrop<<L as ArcSliceLayout>::Data>,
 }
 
 #[cfg(feature = "inlined")]
@@ -98,7 +98,7 @@ pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
 pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
     #[cfg(target_endian = "big")]
     pub(crate) length: usize,
-    data: <L as ArcSliceLayout>::Data,
+    data: ManuallyDrop<<L as ArcSliceLayout>::Data>,
     pub(crate) start: NonNull<T>,
     #[cfg(target_endian = "little")]
     pub(crate) length: usize,
@@ -108,7 +108,7 @@ unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSlice<T, L> {}
 unsafe impl<T: Send + Sync + 'static, L: Layout> Sync for ArcSlice<T, L> {}
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
-    fn new_impl(start: NonNull<T>, length: usize, data: L::Data) -> Self {
+    fn new_impl(start: NonNull<T>, length: usize, data: <L as ArcSliceLayout>::Data) -> Self {
         Self {
             start,
             length,

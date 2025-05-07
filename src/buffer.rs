@@ -46,6 +46,12 @@ pub trait Buffer<T>: Sized + Send + Sync + 'static {
 
     #[doc(hidden)]
     #[inline(always)]
+    fn is_array(&self) -> bool {
+        false
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L>
     where
         T: Send + Sync + 'static,
@@ -85,6 +91,12 @@ impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for [T; N] {
 
     #[inline]
     fn is_unique(&self) -> bool {
+        true
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn is_array(&self) -> bool {
         true
     }
 

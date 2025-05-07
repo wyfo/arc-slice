@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, boxed::Box, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
     borrow::Borrow,
     cmp,
@@ -9,7 +9,6 @@ use core::{
     mem::{size_of, ManuallyDrop, MaybeUninit},
     ops::{Deref, RangeBounds},
     ptr::addr_of,
-    slice,
     str::FromStr,
 };
 
@@ -18,9 +17,12 @@ use either::Either;
 use crate::{
     buffer::{Buffer, StringBuffer},
     error::FromUtf8Error,
-    layout::{BoxedSliceLayout, DefaultLayout, Layout, RawLayout, SimpleLayout, VecLayout},
+    layout::{
+        AnyBufferLayout, BoxedSliceLayout, DefaultLayout, Layout, RawLayout, SimpleLayout,
+        StaticLayout, VecLayout,
+    },
     msrv::ptr,
-    str::{check_char_boundary, StringBufWrapper},
+    str::check_char_boundary,
     utils::{debug_slice, lower_hex, offset_len, panic_out_of_range, upper_hex},
     ArcBytes, ArcStr,
 };
@@ -76,17 +78,17 @@ impl<L: Layout> SmallBytes<L> {
     const MAX_LEN: usize = L::LEN;
 
     #[inline]
-    pub fn new(slice: &[u8]) -> Option<Self> {
-        if slice.len() > Self::MAX_LEN {
+    pub fn new(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > Self::MAX_LEN {
             return None;
         }
         let mut this = Self {
             data: L::DEFAULT,
             offset: 0,
-            tagged_length: slice.len() as u8 | INLINED_FLAG,
+            tagged_length: bytes.len() as u8 | INLINED_FLAG,
         };
         let data = ptr::from_mut(&mut this.data).cast::<u8>();
-        unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), data, slice.len()) }
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) }
         Some(this)
     }
 
@@ -106,16 +108,14 @@ impl<L: Layout> SmallBytes<L> {
     }
 
     #[inline]
-    pub const fn as_slice(&self) -> &[u8] {
+    pub const fn as_ptr(&self) -> *const u8 {
         let data = ptr::from_ref(&self.data).cast::<u8>();
-        unsafe { slice::from_raw_parts(data.add(self.offset as usize), self.len()) }
+        unsafe { data.add(self.offset as usize) }
     }
 
     #[inline]
-    pub fn truncate(&mut self, len: usize) {
-        if len < self.len() {
-            self.tagged_length = len as u8 | INLINED_FLAG;
-        }
+    pub const fn as_slice(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
     #[inline]
@@ -125,6 +125,13 @@ impl<L: Layout> SmallBytes<L> {
         }
         self.offset += offset as u8;
         self.tagged_length -= offset as u8;
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len() {
+            self.tagged_length = len as u8 | INLINED_FLAG;
+        }
     }
 
     #[inline]
@@ -235,29 +242,16 @@ union Inner<L: Layout> {
 
 impl<L: Layout> SmallArcBytes<L> {
     #[inline]
-    pub fn new<B: Buffer<u8>>(buffer: B) -> Self {
-        if buffer.is_array() {
-            if let Some(small) = SmallBytes::new(buffer.as_slice()) {
-                return Self(Inner { small });
-            }
-        }
-        Self(Inner {
-            arc: ManuallyDrop::new(ArcBytes::new(buffer)),
-        })
+    pub fn new(bytes: &[u8]) -> Self {
+        SmallBytes::new(bytes).map_or_else(|| ArcBytes::new(bytes).into(), Into::into)
     }
 
-    #[inline]
-    pub fn from_slice(slice: &[u8]) -> Self {
-        if let Some(small) = SmallBytes::new(slice) {
-            return Self(Inner { small });
-        }
-        Self(Inner {
-            arc: ManuallyDrop::new(ArcBytes::new(slice.to_vec())),
-        })
+    fn new_array<const N: usize>(bytes: [u8; N]) -> Self {
+        SmallBytes::new(&bytes).map_or_else(|| ArcBytes::from(bytes).into(), Into::into)
     }
 
     #[inline(always)]
-    pub const fn as_either(&self) -> Either<&SmallBytes<L>, &ArcBytes<L>> {
+    pub fn as_either(&self) -> Either<&SmallBytes<L>, &ArcBytes<L>> {
         if unsafe { SmallBytes::is_inlined(addr_of!(self.0.small)) } {
             Either::Left(unsafe { &self.0.small })
         } else {
@@ -285,7 +279,7 @@ impl<L: Layout> SmallArcBytes<L> {
     }
 
     #[inline]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         match self.as_either() {
             Either::Left(bytes) => bytes.len(),
             Either::Right(bytes) => bytes.len(),
@@ -293,12 +287,20 @@ impl<L: Layout> SmallArcBytes<L> {
     }
 
     #[inline]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     #[inline]
-    pub const fn as_slice(&self) -> &[u8] {
+    pub fn as_ptr(&self) -> *const u8 {
+        match self.as_either() {
+            Either::Left(bytes) => bytes.as_ptr(),
+            Either::Right(bytes) => bytes.start.as_ptr(),
+        }
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
         match self.as_either() {
             Either::Left(bytes) => bytes.as_slice(),
             Either::Right(bytes) => bytes.as_slice(),
@@ -308,12 +310,8 @@ impl<L: Layout> SmallArcBytes<L> {
     #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self {
         match self.as_either() {
-            Either::Left(bytes) => Self(Inner {
-                small: bytes.subslice(range),
-            }),
-            Either::Right(bytes) => Self(Inner {
-                arc: ManuallyDrop::new(bytes.subslice(range)),
-            }),
+            Either::Left(bytes) => bytes.subslice(range).into(),
+            Either::Right(bytes) => bytes.subslice(range).into(),
         }
     }
 
@@ -323,6 +321,27 @@ impl<L: Layout> SmallArcBytes<L> {
             Either::Left(s) => s.advance(cnt),
             Either::Right(s) => s.advance(cnt),
         }
+    }
+}
+
+impl<L: StaticLayout> SmallArcBytes<L> {
+    #[inline]
+    pub const fn new_static(bytes: &'static [u8]) -> SmallArcBytes<L> {
+        Self(Inner {
+            arc: ManuallyDrop::new(ArcBytes::new_static(bytes)),
+        })
+    }
+}
+
+impl<L: AnyBufferLayout> SmallArcBytes<L> {
+    #[inline]
+    pub fn from_buffer<B: Buffer<u8>>(buffer: B) -> Self {
+        if buffer.is_array() {
+            if let Some(small) = SmallBytes::new(buffer.as_slice()) {
+                return small.into();
+            }
+        }
+        ArcBytes::from_buffer(buffer).into()
     }
 }
 
@@ -380,11 +399,10 @@ impl<L: Layout> Borrow<[u8]> for SmallArcBytes<L> {
     }
 }
 
-#[cfg(not(all(loom, test)))]
 impl<L: Layout> Default for SmallArcBytes<L> {
     #[inline]
     fn default() -> Self {
-        ArcBytes::new_static(&[]).into()
+        SmallBytes::default().into()
     }
 }
 
@@ -426,45 +444,41 @@ impl<L: Layout> Ord for SmallArcBytes<L> {
     }
 }
 
-macro_rules! std_impl {
-    ($($(@$N:ident)? $ty:ty $(: $bound:path)?),*) => {$(
-        impl<L: Layout, $(const $N: usize,)?> From<$ty> for SmallArcBytes<L> {
-
-    #[inline]
-            fn from(value: $ty) -> Self {
-                Self::new(value)
-            }
-        }
-    )*};
+impl<L: Layout, const N: usize> From<[u8; N]> for SmallArcBytes<L> {
+    fn from(value: [u8; N]) -> Self {
+        Self::new_array(value)
+    }
 }
-std_impl!(&'static [u8], @N &'static [u8; N], @N [u8; N], Box<[u8]>, Vec<u8>, Cow<'static, [u8]>: Clone);
 
-impl<L: Layout> From<Either<SmallBytes<L>, ArcBytes<L>>> for SmallArcBytes<L> {
-    #[inline]
-    fn from(value: Either<SmallBytes<L>, ArcBytes<L>>) -> Self {
-        match value {
-            Either::Left(bytes) => Self(Inner { small: bytes }),
-            Either::Right(bytes) => Self(Inner {
-                arc: ManuallyDrop::new(bytes),
-            }),
-        }
+impl<L: AnyBufferLayout> From<Box<[u8]>> for SmallArcBytes<L> {
+    fn from(value: Box<[u8]>) -> Self {
+        ArcBytes::from(value).into()
+    }
+}
+
+impl<L: AnyBufferLayout> From<Vec<u8>> for SmallArcBytes<L> {
+    fn from(value: Vec<u8>) -> Self {
+        ArcBytes::from(value).into()
     }
 }
 
 impl<L: Layout> From<SmallBytes<L>> for SmallArcBytes<L> {
     #[inline]
     fn from(value: SmallBytes<L>) -> Self {
-        Either::<_, ArcBytes<L>>::Left(value).into()
+        Self(Inner { small: value })
     }
 }
 
 impl<L: Layout> From<ArcBytes<L>> for SmallArcBytes<L> {
     #[inline]
     fn from(value: ArcBytes<L>) -> Self {
-        Either::<SmallBytes<L>, _>::Right(value).into()
+        Self(Inner {
+            arc: ManuallyDrop::new(value),
+        })
     }
 }
 
+#[repr(transparent)]
 pub struct SmallStr<L: Layout = DefaultLayout>(SmallBytes<L>);
 
 impl<L: Layout> SmallStr<L> {
@@ -492,20 +506,25 @@ impl<L: Layout> SmallStr<L> {
     }
 
     #[inline]
-    pub const fn as_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
+    pub const fn as_ptr(&self) -> *const u8 {
+        self.0.as_ptr()
     }
 
     #[inline]
-    pub fn truncate(&mut self, len: usize) {
-        check_char_boundary(self, len);
-        self.0.truncate(len);
+    pub const fn as_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
     }
 
     #[inline]
     pub fn advance(&mut self, offset: usize) {
         check_char_boundary(self, offset);
         self.0.advance(offset);
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        check_char_boundary(self, len);
+        self.0.truncate(len);
     }
 
     #[inline]
@@ -619,8 +638,8 @@ pub struct SmallArcStr<L: Layout = DefaultLayout>(SmallArcBytes<L>);
 
 impl<L: Layout> SmallArcStr<L> {
     #[inline]
-    pub fn new<B: StringBuffer>(buffer: B) -> Self {
-        unsafe { Self::from_utf8_unchecked(SmallArcBytes::new(StringBufWrapper(buffer))) }
+    pub fn new(s: &str) -> Self {
+        unsafe { Self::from_utf8_unchecked(SmallArcBytes::new(s.as_bytes())) }
     }
 
     #[inline]
@@ -674,17 +693,25 @@ impl<L: Layout> SmallArcStr<L> {
     }
 
     #[inline]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 
     #[inline]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     #[inline]
-    pub const fn as_str(&self) -> &str {
+    pub fn as_ptr(&self) -> *const u8 {
+        match self.as_either() {
+            Either::Left(bytes) => bytes.as_ptr(),
+            Either::Right(bytes) => bytes.0.start.as_ptr(),
+        }
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
     }
 
@@ -709,6 +736,20 @@ impl<L: Layout> SmallArcStr<L> {
             Either::Left(s) => s.advance(cnt),
             Either::Right(s) => s.advance(cnt),
         }
+    }
+}
+
+impl<L: StaticLayout> SmallArcStr<L> {
+    #[inline]
+    pub const fn new_static(bytes: &'static str) -> SmallArcStr<L> {
+        unsafe { Self::from_utf8_unchecked(SmallArcBytes::new_static(bytes.as_bytes())) }
+    }
+}
+
+impl<L: AnyBufferLayout> SmallArcStr<L> {
+    #[inline]
+    pub fn from_buffer<B: StringBuffer>(buffer: B) -> Self {
+        ArcStr::from_buffer(buffer).into()
     }
 }
 
@@ -759,11 +800,10 @@ impl<L: Layout> Borrow<str> for SmallArcStr<L> {
     }
 }
 
-#[cfg(not(all(loom, test)))]
 impl<L: Layout> Default for SmallArcStr<L> {
     #[inline]
     fn default() -> Self {
-        ArcStr::new_static("").into()
+        unsafe { Self::from_utf8_unchecked(SmallArcBytes::default()) }
     }
 }
 
@@ -799,30 +839,24 @@ impl<L: Layout> Ord for SmallArcStr<L> {
     }
 }
 
-macro_rules! std_impl {
-    ($($ty:ty),*) => {$(
-        impl<L: Layout> From<$ty> for SmallArcStr<L> {
-
-            #[inline]
-            fn from(value: $ty) -> Self {
-                Self::new(value)
-            }
-        }
-    )*};
+impl<L: AnyBufferLayout> From<Box<str>> for SmallArcStr<L> {
+    fn from(value: Box<str>) -> Self {
+        unsafe { Self::from_utf8_unchecked(value.into_boxed_bytes().into()) }
+    }
 }
-std_impl!(
-    &'static str,
-    Box<str>,
-    alloc::string::String,
-    Cow<'static, str>
-);
+
+impl<L: AnyBufferLayout> From<String> for SmallArcStr<L> {
+    fn from(value: String) -> Self {
+        unsafe { Self::from_utf8_unchecked(value.into_bytes().into()) }
+    }
+}
 
 impl<L: Layout> FromStr for SmallArcStr<L> {
     type Err = Infallible;
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(SmallArcBytes::from_slice(s.as_bytes())))
+        Ok(Self(SmallArcBytes::new(s.as_bytes())))
     }
 }
 

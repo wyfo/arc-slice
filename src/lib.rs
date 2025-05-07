@@ -6,8 +6,8 @@ pub mod __private;
 mod arc;
 mod atomic;
 pub mod buffer;
-#[cfg(feature = "bytes")]
-mod bytes;
+// #[cfg(feature = "bytes")]
+// mod bytes;
 pub mod error;
 #[cfg(feature = "inlined")]
 pub mod inlined;
