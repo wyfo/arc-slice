@@ -20,7 +20,7 @@ use crate::msrv::{ptr, NonNullExt, StrictProvenance};
 use crate::{
     arc::Arc,
     buffer::{BorrowMetadata, Buffer, BufferWithMetadata, DynBuffer},
-    layout::{AnyBufferLayout, DefaultLayout, Layout, StaticLayout},
+    layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, StaticLayout},
     macros::is,
     slice_mut::ArcSliceMut,
     utils::{
@@ -88,8 +88,8 @@ pub trait ArcSliceLayout: 'static {
 
 #[cfg(not(feature = "inlined"))]
 pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
-    start: NonNull<T>,
-    length: usize,
+    pub(crate) start: NonNull<T>,
+    pub(crate) length: usize,
     data: ManuallyDrop<L::Data>,
 }
 
@@ -97,11 +97,11 @@ pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
 #[repr(C)]
 pub struct ArcSlice<T: Send + Sync + 'static, L: Layout = DefaultLayout> {
     #[cfg(target_endian = "big")]
-    length: usize,
+    pub(crate) length: usize,
     data: <L as ArcSliceLayout>::Data,
-    start: NonNull<T>,
+    pub(crate) start: NonNull<T>,
     #[cfg(target_endian = "little")]
-    length: usize,
+    pub(crate) length: usize,
 }
 
 unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSlice<T, L> {}
@@ -143,6 +143,11 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    #[inline]
+    pub const fn as_ptr(&self) -> *const T {
+        self.start.as_ptr()
     }
 
     #[cfg(feature = "const-slice")]
@@ -276,7 +281,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
     }
 
     #[inline]
-    pub fn with_layout<L2: Layout>(self) -> ArcSlice<T, L2> {
+    pub fn with_layout<L2: Layout + FromLayout<L>>(self) -> ArcSlice<T, L2> {
         let mut this = ManuallyDrop::new(self);
         let data = unsafe { ManuallyDrop::take(&mut this.data) };
         ArcSlice {
@@ -341,7 +346,7 @@ impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
         metadata: M,
     ) -> Self {
         if is!(M, ()) {
-            return B::into_arc_slice(buffer);
+            return buffer.into_arc_slice();
         }
         Self::from_buffer_impl(BufferWithMetadata::new(buffer, metadata))
     }
@@ -539,13 +544,13 @@ where
 
 impl<T: Send + Sync + 'static, L: AnyBufferLayout> From<Box<[T]>> for ArcSlice<T, L> {
     fn from(value: Box<[T]>) -> Self {
-        Self::from_vec(value.into())
+        value.into_arc_slice()
     }
 }
 
 impl<T: Send + Sync + 'static, L: AnyBufferLayout> From<Vec<T>> for ArcSlice<T, L> {
     fn from(value: Vec<T>) -> Self {
-        Self::from_vec(value)
+        value.into_arc_slice()
     }
 }
 

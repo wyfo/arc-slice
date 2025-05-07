@@ -18,17 +18,17 @@ mod msrv;
 mod serde;
 mod slice;
 // mod slice_mut;
-// mod str;
+mod str;
 mod utils;
 
 pub use crate::{
     slice::{ArcSlice, ArcSliceBorrow},
     // slice_mut::ArcSliceMut,
-    // str::{ArcStr, ArcStrRef},
+    str::{ArcStr, ArcStrBorrow},
 };
 
 pub type ArcBytes<L = layout::DefaultLayout> = ArcSlice<u8, L>;
-pub type ArcBytesRef<'a, L = layout::DefaultLayout> = ArcSliceBorrow<'a, u8, L>;
+pub type ArcBytesBorrow<'a, L = layout::DefaultLayout> = ArcSliceBorrow<'a, u8, L>;
 // pub type ArcBytesMut = ArcSliceMut<u8>;
 
 mod slice_mut {

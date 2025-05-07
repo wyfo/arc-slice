@@ -17,9 +17,10 @@ use either::Either;
 
 use crate::{
     buffer::{Buffer, StringBuffer},
+    error::FromUtf8Error,
     layout::{BoxedSliceLayout, DefaultLayout, Layout, RawLayout, SimpleLayout, VecLayout},
     msrv::ptr,
-    str::{check_char_boundary, FromUtf8Error, StringBufWrapper},
+    str::{check_char_boundary, StringBufWrapper},
     utils::{debug_slice, lower_hex, offset_len, panic_out_of_range, upper_hex},
     ArcBytes, ArcStr,
 };

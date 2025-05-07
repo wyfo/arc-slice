@@ -17,8 +17,23 @@ use crate::{
     error::TryReserveError,
     layout::AnyBufferLayout,
     macros::{is, is_not},
+    str::ArcStr,
     ArcSlice,
 };
+
+pub trait BorrowMetadata {
+    type Metadata: Sync + 'static;
+
+    fn borrow_metadata(&self) -> &Self::Metadata;
+}
+
+#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
+impl<B: BorrowMetadata> BorrowMetadata for Arc<B> {
+    type Metadata = B::Metadata;
+    fn borrow_metadata(&self) -> &Self::Metadata {
+        self.as_ref().borrow_metadata()
+    }
+}
 
 #[doc(hidden)]
 #[derive(Debug)]
@@ -93,7 +108,7 @@ impl<T: Send + Sync + 'static> Buffer<T> for Box<[T]> {
 
     #[inline(always)]
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
-        self.into()
+        ArcSlice::from_vec(self.into_vec())
     }
 }
 
@@ -110,7 +125,7 @@ impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
 
     #[inline(always)]
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
-        self.into()
+        ArcSlice::from_vec(self)
     }
 }
 
@@ -291,6 +306,12 @@ pub trait StringBuffer: Sized + Send + Sync + 'static {
     fn as_str(&self) -> &str;
 
     fn is_unique(&self) -> bool;
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
+        unsafe { ArcStr::from_utf8_unchecked(StringBufferWrapper(self).into_arc_slice()) }
+    }
 }
 
 impl StringBuffer for &'static str {
@@ -302,6 +323,12 @@ impl StringBuffer for &'static str {
     #[inline]
     fn is_unique(&self) -> bool {
         false
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
+        unsafe { ArcStr::from_utf8_unchecked(self.as_bytes().into_arc_slice()) }
     }
 }
 
@@ -315,6 +342,12 @@ impl StringBuffer for Box<str> {
     fn is_unique(&self) -> bool {
         true
     }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
+        unsafe { ArcStr::from_utf8_unchecked(self.into_boxed_bytes().into_arc_slice()) }
+    }
 }
 
 impl StringBuffer for String {
@@ -326,6 +359,12 @@ impl StringBuffer for String {
     #[inline]
     fn is_unique(&self) -> bool {
         true
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
+        unsafe { ArcStr::from_utf8_unchecked(self.into_bytes().into_arc_slice()) }
     }
 }
 
@@ -357,17 +396,35 @@ impl<B: StringBuffer + Send + Sync> StringBuffer for Arc<B> {
     }
 }
 
-pub trait BorrowMetadata {
-    type Metadata: Sync + 'static;
+#[derive(Clone)]
+pub(crate) struct StringBufferWrapper<B>(pub(crate) B);
 
-    fn borrow_metadata(&self) -> &Self::Metadata;
+impl<B: StringBuffer> Buffer<u8> for StringBufferWrapper<B> {
+    fn as_slice(&self) -> &[u8] {
+        self.0.as_str().as_bytes()
+    }
+
+    fn is_unique(&self) -> bool {
+        self.0.is_unique()
+    }
 }
 
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl<B: BorrowMetadata> BorrowMetadata for Arc<B> {
+#[cfg(feature = "raw-buffer")]
+unsafe impl<B: RawStringBuffer> RawBuffer<u8> for StringBufferWrapper<B> {
+    fn into_raw(self) -> *const () {
+        self.0.into_raw()
+    }
+
+    unsafe fn from_raw(ptr: *const ()) -> Self {
+        Self(unsafe { B::from_raw(ptr) })
+    }
+}
+
+impl<B: BorrowMetadata> BorrowMetadata for StringBufferWrapper<B> {
     type Metadata = B::Metadata;
+
     fn borrow_metadata(&self) -> &Self::Metadata {
-        self.as_ref().borrow_metadata()
+        self.0.borrow_metadata()
     }
 }
 

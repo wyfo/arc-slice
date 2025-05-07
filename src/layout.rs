@@ -51,10 +51,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "default-layout-mut-vec")] {
         pub type DefaultLayoutMut = VecLayout;
     } else {
-        pub type DefaultLayoutMut = SimpleLayout<
-            { cfg!(feature = "default-layout-mut-any-buffer") },
-            { cfg!(feature = "default-layout-static") },
-        >;
+        pub type DefaultLayoutMut = SimpleLayout<{ cfg!(feature = "default-layout-mut-any-buffer") }>;
     }
 }
 

@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
     any::Any,
     borrow::Borrow,
@@ -6,106 +6,44 @@ use core::{
     convert::Infallible,
     fmt,
     hash::{Hash, Hasher},
-    mem::MaybeUninit,
     ops::{Deref, RangeBounds},
-    str::{FromStr, Utf8Error},
+    str::FromStr,
 };
 
+#[cfg(feature = "raw-buffer")]
+use crate::buffer::RawStringBuffer;
 use crate::{
-    buffer::{BorrowMetadata, Buffer, RawBuffer, RawStringBuffer, StringBuffer},
-    layout::{DefaultLayout, Layout},
+    buffer::{BorrowMetadata, StringBuffer, StringBufferWrapper},
+    error::FromUtf8Error,
+    layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, StaticLayout},
     macros::is,
-    utils::offset_len,
-    ArcBytes, ArcBytesRef,
+    utils::{offset_len, try_transmute},
+    ArcBytes, ArcBytesBorrow,
 };
-
-#[derive(Clone)]
-pub(crate) struct StringBufWrapper<B>(pub(crate) B);
-
-impl<B: StringBuffer> Buffer<u8> for StringBufWrapper<B> {
-    fn as_slice(&self) -> &[u8] {
-        self.0.as_str().as_bytes()
-    }
-
-    fn is_unique(&self) -> bool {
-        self.0.is_unique()
-    }
-
-    fn try_into_static(self) -> Result<&'static [u8], Self>
-    where
-        Self: Sized,
-    {
-        self.0.try_into_static().map(str::as_bytes).map_err(Self)
-    }
-
-    fn try_into_vec(self) -> Result<Vec<u8>, Self>
-    where
-        Self: Sized,
-    {
-        self.0
-            .try_into_string()
-            .map(String::into_bytes)
-            .map_err(Self)
-    }
-}
-
-unsafe impl<B: RawStringBuffer> RawBuffer<u8> for StringBufWrapper<B> {
-    fn into_raw(self) -> *mut () {
-        self.0.into_raw()
-    }
-
-    unsafe fn from_raw(ptr: *mut ()) -> Self {
-        Self(unsafe { B::from_raw(ptr) })
-    }
-}
-
-impl<B: BorrowMetadata> BorrowMetadata for StringBufWrapper<B> {
-    type Metadata = B::Metadata;
-
-    fn borrow_metadata(&self) -> &Self::Metadata {
-        self.0.borrow_metadata()
-    }
-}
 
 pub struct ArcStr<L: Layout = DefaultLayout>(ArcBytes<L>);
 
 impl<L: Layout> ArcStr<L> {
     #[inline]
-    pub fn new<B: StringBuffer>(buffer: B) -> Self {
-        Self::with_metadata(buffer, ())
+    pub fn new(s: &str) -> Self {
+        unsafe { Self::from_utf8_unchecked(ArcBytes::new(s.as_bytes())) }
     }
 
-    #[cfg(not(all(loom, test)))]
+    #[cfg(feature = "const-slice")]
     #[inline]
-    pub const fn new_static(s: &'static str) -> Self {
-        unsafe { Self::from_utf8_unchecked(ArcBytes::new_static(s.as_bytes())) }
+    pub const fn from_utf8(bytes: ArcBytes<L>) -> Result<Self, FromUtf8Error<ArcBytes<L>>> {
+        let slice = unsafe { core::slice::from_raw_parts(bytes.start.as_ptr(), bytes.length) };
+        match core::str::from_utf8(slice) {
+            Ok(_) => Ok(unsafe { Self::from_utf8_unchecked(bytes) }),
+            Err(error) => Err(FromUtf8Error { bytes, error }),
+        }
     }
 
-    #[inline]
-    pub fn with_metadata<B: StringBuffer, M: Send + Sync + 'static>(
-        buffer: B,
-        metadata: M,
-    ) -> Self {
-        let buffer = StringBufWrapper(buffer);
-        unsafe { Self::from_utf8_unchecked(ArcBytes::with_buffer_and_metadata(buffer, metadata)) }
-    }
-
-    #[inline]
-    pub fn with_borrowed_metadata<B: StringBuffer + BorrowMetadata>(buffer: B) -> Self {
-        let buffer = StringBufWrapper(buffer);
-        unsafe { Self::from_utf8_unchecked(ArcBytes::with_buffer_and_borrowed_metadata(buffer)) }
-    }
-
-    #[allow(clippy::should_implement_trait)]
-    #[inline]
-    pub fn from_str(s: &str) -> Self {
-        unsafe { Self::from_utf8_unchecked(ArcBytes::from_slice(s.as_bytes())) }
-    }
-
+    #[cfg(not(feature = "const-slice"))]
     #[inline]
     pub fn from_utf8(bytes: ArcBytes<L>) -> Result<Self, FromUtf8Error<ArcBytes<L>>> {
         match core::str::from_utf8(bytes.as_slice()) {
-            Ok(_) => Ok(Self(bytes)),
+            Ok(_) => Ok(unsafe { Self::from_utf8_unchecked(bytes) }),
             Err(error) => Err(FromUtf8Error { bytes, error }),
         }
     }
@@ -128,21 +66,33 @@ impl<L: Layout> ArcStr<L> {
         self.0.is_empty()
     }
 
+    pub const fn as_ptr(&self) -> *const u8 {
+        self.0.as_ptr()
+    }
+
+    #[cfg(feature = "const-slice")]
     #[inline]
     pub const fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
     }
 
+    #[cfg(not(feature = "const-slice"))]
     #[inline]
-    pub fn truncate(&mut self, len: usize) {
-        check_char_boundary(self, len);
-        self.0.truncate(len);
+    pub fn as_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(self.0.as_slice()) }
     }
 
     #[inline]
-    pub fn advance(&mut self, offset: usize) {
+    pub fn borrow(&self, range: impl RangeBounds<usize>) -> ArcStrBorrow<L> {
+        let (offset, len) = offset_len(self.len(), range);
         check_char_boundary(self, offset);
-        self.0.advance(offset);
+        check_char_boundary(self, offset + len);
+        ArcStrBorrow(unsafe { self.0.borrow_impl(offset, len) })
+    }
+
+    #[inline]
+    pub fn borrow_from_ref(&self, subset: &str) -> ArcStrBorrow<L> {
+        ArcStrBorrow(self.0.borrow_from_ref(subset.as_bytes()))
     }
 
     #[inline]
@@ -156,6 +106,18 @@ impl<L: Layout> ArcStr<L> {
     #[inline]
     pub fn subslice_from_ref(&self, subset: &str) -> Self {
         unsafe { Self::from_utf8_unchecked(self.0.subslice_from_ref(subset.as_bytes())) }
+    }
+
+    #[inline]
+    pub fn advance(&mut self, offset: usize) {
+        check_char_boundary(self, offset);
+        self.0.advance(offset);
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        check_char_boundary(self, len);
+        self.0.truncate(len);
     }
 
     #[inline]
@@ -173,18 +135,8 @@ impl<L: Layout> ArcStr<L> {
     }
 
     #[inline]
-    pub fn into_string(self) -> String {
-        unsafe { String::from_utf8_unchecked(self.0.into_vec()) }
-    }
-
-    #[inline]
-    pub fn into_cow(self) -> Cow<'static, str> {
-        unsafe {
-            match self.0.into_cow() {
-                Cow::Borrowed(s) => Cow::Borrowed(core::str::from_utf8_unchecked(s)),
-                Cow::Owned(s) => Cow::Owned(String::from_utf8_unchecked(s)),
-            }
-        }
+    pub fn is_unique(&self) -> bool {
+        self.0.is_unique()
     }
 
     #[inline]
@@ -193,23 +145,20 @@ impl<L: Layout> ArcStr<L> {
     }
 
     #[inline]
-    pub fn downcast_buffer<B: StringBuffer>(self) -> Result<B, Self> {
+    pub fn try_into_buffer<B: StringBuffer>(self) -> Result<B, Self> {
         if is!(B, &'static str) {
-            let mut buffer = MaybeUninit::<B>::uninit();
-            let slice = self.0.downcast_buffer::<&'static [u8]>().map_err(Self)?;
-            let buffer_ptr = buffer.as_mut_ptr().cast::<&'static str>();
-            unsafe { buffer_ptr.write(core::str::from_utf8_unchecked(slice)) };
-            return Ok(unsafe { buffer.assume_init() });
-        }
-        if is!(B, String) {
-            let mut buffer = MaybeUninit::<B>::uninit();
-            let vec = self.0.downcast_buffer::<Vec<u8>>().map_err(Self)?;
-            let buffer_ptr = buffer.as_mut_ptr().cast::<String>();
-            unsafe { buffer_ptr.write(String::from_utf8_unchecked(vec)) };
-            return Ok(unsafe { buffer.assume_init() });
+            let slice = self.0.try_into_buffer::<&'static [u8]>().map_err(Self)?;
+            return Ok(try_transmute(unsafe { core::str::from_utf8_unchecked(slice) }).unwrap());
+        } else if is!(B, Box<str>) {
+            let boxed_slice = self.0.try_into_buffer::<Box<[u8]>>().map_err(Self)?;
+            let string = unsafe { String::from_utf8_unchecked(boxed_slice.into()) };
+            return Ok(try_transmute(string.into_boxed_str()).unwrap());
+        } else if is!(B, String) {
+            let vec = self.0.try_into_buffer::<Vec<u8>>().map_err(Self)?;
+            return Ok(try_transmute(unsafe { String::from_utf8_unchecked(vec) }).unwrap());
         }
         self.0
-            .downcast_buffer::<StringBufWrapper<B>>()
+            .try_into_buffer::<StringBufferWrapper<B>>()
             .map_err(Self)
             .map(|s| s.0)
     }
@@ -225,8 +174,64 @@ impl<L: Layout> ArcStr<L> {
     }
 
     #[inline]
-    pub fn with_layout<L2: Layout>(self) -> ArcStr<L2> {
+    pub fn with_layout<L2: Layout + FromLayout<L>>(self) -> ArcStr<L2> {
         ArcStr(self.0.with_layout())
+    }
+
+    pub fn drop_with_unique_hint(self) {
+        self.0.drop_with_unique_hint();
+    }
+}
+
+impl<L: StaticLayout> ArcStr<L> {
+    pub const fn new_static(s: &'static str) -> Self {
+        unsafe { Self::from_utf8_unchecked(ArcBytes::new_static(s.as_bytes())) }
+    }
+}
+
+impl<L: AnyBufferLayout> ArcStr<L> {
+    pub fn from_buffer<B: StringBuffer>(buffer: B) -> Self {
+        Self::from_buffer_with_metadata(buffer, ())
+    }
+
+    pub fn from_buffer_with_metadata<B: StringBuffer, M: Send + Sync + 'static>(
+        buffer: B,
+        metadata: M,
+    ) -> Self {
+        if is!(M, ()) {
+            return buffer.into_arc_str();
+        }
+        let bytes = ArcBytes::from_buffer_with_metadata(StringBufferWrapper(buffer), metadata);
+        unsafe { Self::from_utf8_unchecked(bytes) }
+    }
+
+    #[inline]
+    pub fn from_buffer_with_borrowed_metadata<B: StringBuffer + BorrowMetadata>(buffer: B) -> Self {
+        let bytes = ArcBytes::from_buffer_with_borrowed_metadata(StringBufferWrapper(buffer));
+        unsafe { Self::from_utf8_unchecked(bytes) }
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    #[inline]
+    pub fn from_raw_buffer<B: RawStringBuffer>(buffer: B) -> Self {
+        let bytes = ArcBytes::from_raw_buffer(StringBufferWrapper(buffer));
+        unsafe { Self::from_utf8_unchecked(bytes) }
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    #[inline]
+    pub fn from_raw_buffer_and_borrowed_metadata<B: RawStringBuffer + BorrowMetadata>(
+        buffer: B,
+    ) -> Self {
+        let bytes = ArcBytes::from_raw_buffer_and_borrowed_metadata(StringBufferWrapper(buffer));
+        unsafe { Self::from_utf8_unchecked(bytes) }
+    }
+}
+
+impl<L: Layout> Clone for ArcStr<L> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
@@ -270,14 +275,7 @@ impl<L: Layout> Borrow<str> for ArcStr<L> {
     }
 }
 
-impl<L: Layout> Clone for ArcStr<L> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<L: Layout> Default for ArcStr<L> {
+impl<L: StaticLayout> Default for ArcStr<L> {
     #[inline]
     fn default() -> Self {
         Self::new_static("")
@@ -355,30 +353,15 @@ where
     }
 }
 
-macro_rules! std_impl {
-    ($($ty:ty),*) => {$(
-        impl<L: Layout> From<$ty> for ArcStr<L> {
-
-            #[inline]
-            fn from(value: $ty) -> Self {
-                Self::new(value)
-            }
-        }
-    )*};
-}
-std_impl!(&'static str, Box<str>, String, Cow<'static, str>);
-
-impl<L: Layout> From<ArcStr<L>> for String {
-    #[inline]
-    fn from(value: ArcStr<L>) -> Self {
-        value.into_string()
+impl<L: AnyBufferLayout> From<Box<str>> for ArcStr<L> {
+    fn from(value: Box<str>) -> Self {
+        value.into_arc_str()
     }
 }
 
-impl<L: Layout> From<ArcStr<L>> for Cow<'static, str> {
-    #[inline]
-    fn from(value: ArcStr<L>) -> Self {
-        value.into_cow()
+impl<L: AnyBufferLayout> From<String> for ArcStr<L> {
+    fn from(value: String) -> Self {
+        value.into_arc_str()
     }
 }
 
@@ -387,7 +370,7 @@ impl<L: Layout> FromStr for ArcStr<L> {
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(ArcBytes::from_slice(s.as_bytes())))
+        Ok(Self(ArcBytes::new(s.as_bytes())))
     }
 }
 
@@ -408,9 +391,9 @@ impl<L: Layout> From<ArcStr<L>> for ArcBytes<L> {
 }
 
 #[derive(Clone, Copy)]
-pub struct ArcStrRef<'a, L: Layout = DefaultLayout>(ArcBytesRef<'a, L>);
+pub struct ArcStrBorrow<'a, L: Layout = DefaultLayout>(ArcBytesBorrow<'a, L>);
 
-impl<L: Layout> Deref for ArcStrRef<'_, L> {
+impl<L: Layout> Deref for ArcStrBorrow<'_, L> {
     type Target = str;
 
     #[inline]
@@ -419,58 +402,18 @@ impl<L: Layout> Deref for ArcStrRef<'_, L> {
     }
 }
 
-impl<L: Layout> fmt::Debug for ArcStrRef<'_, L> {
+impl<L: Layout> fmt::Debug for ArcStrBorrow<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-impl<L: Layout> ArcStrRef<'_, L> {
+impl<L: Layout> ArcStrBorrow<'_, L> {
     #[inline]
-    pub fn into_arc(self) -> ArcStr<L> {
-        unsafe { ArcStr::from_utf8_unchecked(self.0.into_arc()) }
+    pub fn to_owned(self) -> ArcStr<L> {
+        unsafe { ArcStr::from_utf8_unchecked(self.0.to_owned()) }
     }
 }
-
-pub struct FromUtf8Error<B> {
-    pub(crate) bytes: B,
-    pub(crate) error: Utf8Error,
-}
-
-impl<B> FromUtf8Error<B> {
-    pub fn as_bytes(&self) -> &B {
-        &self.bytes
-    }
-
-    pub fn into_bytes(self) -> B {
-        self.bytes
-    }
-
-    pub fn error(&self) -> Utf8Error {
-        self.error
-    }
-}
-
-impl<B: fmt::Debug> fmt::Debug for FromUtf8Error<B> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FromUtf8Error")
-            .field("bytes", &self.bytes)
-            .field("error", &self.error)
-            .finish()
-    }
-}
-
-impl<B> fmt::Display for FromUtf8Error<B> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.error.fmt(f)
-    }
-}
-
-#[cfg(feature = "std")]
-const _: () = {
-    extern crate std;
-    impl<B: fmt::Debug> std::error::Error for FromUtf8Error<B> {}
-};
 
 pub(crate) fn check_char_boundary(s: &str, offset: usize) {
     #[cold]
