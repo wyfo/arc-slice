@@ -35,7 +35,7 @@ pub trait Buffer<T>: Sized + Send + Sync + 'static {
     where
         T: Send + Sync + 'static,
     {
-        ArcSlice::from_buffer(self)
+        ArcSlice::from_buffer_impl(BufferWithMetadata::new(self, ()))
     }
 
     #[doc(hidden)]
