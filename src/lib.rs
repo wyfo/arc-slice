@@ -29,7 +29,8 @@ pub use crate::{
 
 pub type ArcBytes<L = layout::DefaultLayout> = ArcSlice<u8, L>;
 pub type ArcBytesBorrow<'a, L = layout::DefaultLayout> = ArcSliceBorrow<'a, u8, L>;
-// pub type ArcBytesMut = ArcSliceMut<u8>;
+// pub type ArcBytesMut<L = layout::DefaultLayoutMut, const UNIQUE: bool = true> =
+// ArcSliceMut<u8, L, UNIQUE>;
 
 mod slice_mut {
     #[derive(Debug)]

@@ -24,7 +24,6 @@ default = ["std", "const-slice"]
 const-slice = []
 inlined = ["either"] # MSRV use dep:
 abort-on-refcount-overflow = []
-#portable-atomic-util = ["portable-atomic", "portable-atomic-util"]
 raw-buffer = []
 std = ["abort-on-refcount-overflow"]
 # default layout

@@ -19,9 +19,9 @@ use crate::msrv::{ConstPtrExt, NonNullExt, StrictProvenance};
 use crate::{
     atomic,
     atomic::AtomicUsize,
-    buffer::{ArrayPtr, Buffer, BufferMut, BufferMutExt, BufferWithMetadata, DynBuffer},
+    buffer::{ArrayPtr, Buffer, BufferMut, BufferWithMetadata, DynBuffer},
     macros::is,
-    msrv::{ptr, BoxExt, NonZero, SubPtrExt},
+    msrv::{ptr, BoxExt, NonZero},
     utils::slice_into_raw_parts,
 };
 
@@ -49,6 +49,10 @@ struct CompactVec<T> {
 }
 
 impl<T> CompactVec<T> {
+    unsafe fn to_vec(&self, length: usize) -> Vec<T> {
+        unsafe { Vec::from_raw_parts(self.start.as_ptr(), length, self.capacity.get()) }
+    }
+
     unsafe fn is_unique(_arc: ErasedArc) -> bool {
         true
     }
@@ -67,18 +71,18 @@ impl<T> CompactVec<T> {
         let vec = &unsafe { arc.cast::<ArcInner<Self>>().as_ref() }.buffer;
         let capacity = vec.capacity.get();
         if is!({ type_id }, Vec<T>) {
-            let offset = unsafe { start.cast().sub_ptr(vec.start) };
-            let mut vec =
-                unsafe { Vec::from_raw_parts(vec.start.as_ptr(), offset + length, capacity) };
-            unsafe { vec.shift_left(offset, length) };
-            unsafe { buffer.cast().write(vec) };
-            return Some(buffer);
+            if start.cast::<T>() != vec.start {
+                unsafe { ptr::copy(start.cast::<T>().as_ptr(), vec.start.as_ptr(), length) };
+            }
+            unsafe { buffer.cast().write(vec.to_vec(length)) };
         } else if is!({ type_id }, Box<[T]>) && length == capacity {
             let slice = ptr::slice_from_raw_parts_mut(vec.start.as_ptr(), capacity);
             unsafe { buffer.cast().write(Box::from_raw(slice)) };
-            return Some(buffer);
+        } else {
+            return None;
         }
-        None
+        drop(unsafe { Box::from_non_null(arc.cast::<ArcInner<MaybeUninit<Self>>>()) });
+        Some(buffer)
     }
 }
 
@@ -136,10 +140,9 @@ impl ArcVTable {
         length: usize,
     ) -> Option<NonNull<()>> {
         let inner = arc.cast::<ArcInner<B>>();
-        if unsafe {
-            inner.as_ref().buffer.as_slice().len() == length
-                && B::take_buffer(addr_of_mut!((*inner.as_ptr()).buffer), type_id, buffer)
-        } {
+        if unsafe { inner.as_ref().buffer.as_slice().len() == length }
+            && unsafe { B::take_buffer(addr_of_mut!((*inner.as_ptr()).buffer), type_id, buffer) }
+        {
             drop(unsafe { Box::from_non_null(arc.cast::<ArcInner<MaybeUninit<B>>>()) });
             return Some(buffer);
         }
