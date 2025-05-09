@@ -41,7 +41,25 @@ struct ArcInner<B> {
     buffer: B,
 }
 
-type FullVec<T> = BufferWithMetadata<Vec<T>, ()>;
+#[repr(C)]
+struct WithLength<B> {
+    length: usize,
+    buffer: B,
+}
+
+impl<T> WithLength<[T; 0]> {
+    fn new() -> Self {
+        Self {
+            length: 0,
+            buffer: [],
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> *mut [T] {
+        // use `as_mut_slice` to avoid confusion with `BufferMut::as_mut_ptr`
+        ptr::slice_from_raw_parts_mut(self.buffer.as_mut_slice().as_mut_ptr(), self.length)
+    }
+}
 
 struct CompactVec<T> {
     start: NonNull<T>,
@@ -103,6 +121,8 @@ impl<T> From<Vec<T>> for CompactVec<T> {
         }
     }
 }
+
+type FullVec<T> = BufferWithMetadata<Vec<T>, ()>;
 
 #[allow(clippy::type_complexity)]
 struct ArcVTable {
@@ -204,7 +224,6 @@ enum VTableOrCapacity {
 }
 
 type ErasedArc = NonNull<ArcInner<()>>;
-
 #[allow(missing_debug_implementations)]
 pub struct Arc<T, const ANY_BUFFER: bool = true> {
     inner: ErasedArc,
@@ -213,43 +232,60 @@ pub struct Arc<T, const ANY_BUFFER: bool = true> {
 
 impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
     fn slice_layout(len: usize) -> Result<Layout, LayoutError> {
-        let (layout, _) = Layout::new::<ArcInner<[T; 0]>>().extend(Layout::array::<T>(len)?)?;
+        let inner_layout = if mem::needs_drop::<T>() {
+            Layout::new::<ArcInner<WithLength<[T; 0]>>>()
+        } else {
+            Layout::new::<ArcInner<[T; 0]>>()
+        };
+        let (layout, _) = inner_layout.extend(Layout::array::<T>(len)?)?;
         Ok(layout)
     }
 
-    fn allocate_slice(len: usize) -> (Self, NonNull<T>) {
-        let layout = Self::slice_layout(len).expect("capacity overflow");
-        let inner = NonNull::new(unsafe { alloc(layout) }.cast::<ArcInner<[T; 0]>>())
-            .unwrap_or_else(|| handle_alloc_error(layout));
-        unsafe {
-            inner.write(ArcInner {
-                refcount: AtomicUsize::new(1),
-                vtable_or_capacity: ptr::without_provenance(
-                    CAPACITY_FLAG | (len << CAPACITY_SHIFT),
-                ),
-                buffer: [],
-            });
-        }
+    fn allocate_slice<B>(
+        capacity: usize,
+        buffer: B,
+        slice: impl Fn(&mut B) -> *mut [T],
+    ) -> (Self, NonNull<T>) {
+        let layout = Self::slice_layout(capacity).expect("capacity overflow");
+        let mut inner_ptr = NonNull::new(unsafe { alloc(layout) })
+            .unwrap_or_else(|| handle_alloc_error(layout))
+            .cast();
+        let inner = ArcInner {
+            refcount: AtomicUsize::new(1),
+            vtable_or_capacity: ptr::without_provenance(
+                CAPACITY_FLAG | (capacity << CAPACITY_SHIFT),
+            ),
+            buffer,
+        };
+        unsafe { inner_ptr.write(inner) };
         let arc = Self {
-            inner: inner.cast(),
+            inner: inner_ptr.cast(),
             _phantom: PhantomData,
         };
-        let start = NonNull::new(unsafe { inner.as_ref() }.buffer.as_ptr().cast_mut()).unwrap();
-        (arc, start)
+        let slice_ptr = slice(&mut unsafe { inner_ptr.as_mut() }.buffer);
+        (arc, NonNull::new(slice_ptr.cast()).unwrap())
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> (Self, NonNull<T>) {
+        if mem::needs_drop::<T>() {
+            Self::allocate_slice(capacity, [], |b| b.as_mut())
+        } else {
+            Self::allocate_slice(capacity, WithLength::new(), |b| b.as_mut_slice())
+        }
     }
 
     pub(crate) fn new(slice: &[T]) -> (Self, NonNull<T>)
     where
         T: Copy,
     {
-        let (arc, start) = Self::allocate_slice(slice.len());
+        let (arc, start) = Self::with_capacity(slice.len());
         unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), start.as_ptr(), slice.len()) };
         (arc, start)
     }
 
     pub(crate) fn new_array<const N: usize>(array: [T; N]) -> (Self, NonNull<T>) {
         let array = ManuallyDrop::new(array);
-        let (arc, start) = Self::allocate_slice(N);
+        let (arc, start) = Self::with_capacity(N);
         unsafe { ptr::copy_nonoverlapping(array.as_ptr(), start.as_ptr(), N) };
         (arc, start)
     }
@@ -330,14 +366,15 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
     unsafe fn deallocate(&mut self) {
         match self.vtable_or_capa() {
             VTableOrCapacity::VTable(vtable) => unsafe { (vtable.dealloc)(self.inner) },
-            VTableOrCapacity::Capacity(capacity) => unsafe {
-                let inner = self.inner.cast::<ArcInner<[T; 0]>>().as_mut();
-                // use `as_mut_slice` to avoid confusion with `BufferMut::as_mut_ptr`
-                let start = inner.buffer.as_mut_slice().as_mut_ptr();
-                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(start, capacity));
+            VTableOrCapacity::Capacity(capacity) => {
+                if mem::needs_drop::<T>() {
+                    let inner =
+                        unsafe { self.inner.cast::<ArcInner<WithLength<[T; 0]>>>().as_mut() };
+                    unsafe { ptr::drop_in_place(inner.buffer.as_mut_slice()) };
+                }
                 let layout = Self::slice_layout(capacity).unwrap();
-                dealloc(self.inner.as_ptr().cast(), layout);
-            },
+                unsafe { dealloc(self.inner.as_ptr().cast(), layout) };
+            }
         }
     }
 
