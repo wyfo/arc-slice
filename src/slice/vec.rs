@@ -16,7 +16,10 @@ use crate::{
     macros::is,
     msrv::{ptr, NonZero, SubPtrExt},
     slice::ArcSliceLayout,
-    utils::{static_slice, try_transmute},
+    utils::{
+        static_slice, transmute_checked, try_transmute, unreachable_checked, NewChecked,
+        UnwrapChecked,
+    },
 };
 
 const CAPACITY_FLAG: usize = 1;
@@ -135,7 +138,7 @@ impl BoxedSliceOrVecLayout for VecLayout {
     const TRUNCATABLE: bool = true;
 
     fn get_base<T>(vec: &mut Vec<T>) -> Option<Self::Base> {
-        Some(NonNull::new(vec.as_mut_ptr()).unwrap().cast())
+        Some(NonNull::new_checked(vec.as_mut_ptr()).cast())
     }
 
     #[allow(unstable_name_collisions)]
@@ -247,11 +250,11 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
                 let mut vec = unsafe { Self::rebuild_vec(start, length, capacity, *base) };
                 let offset = unsafe { start.as_ptr().sub_ptr(vec.as_mut_ptr()) };
                 unsafe { vec.shift_left(offset, length) };
-                Some(try_transmute::<_, B>(vec).ok().unwrap())
+                Some(transmute_checked(vec))
             }
             Data::Capacity(capacity) if is!(B, Box<[T]>) && length == capacity.get() => {
                 let slice = ptr::slice_from_raw_parts_mut(start.as_ptr(), length);
-                Some(try_transmute(unsafe { Box::from_raw(slice) }).ok().unwrap())
+                Some(transmute_checked(unsafe { Box::from_raw(slice) }))
             }
             Data::Capacity(_) => None,
             Data::Arc(arc) => ManuallyDrop::into_inner(arc)

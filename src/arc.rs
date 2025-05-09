@@ -22,7 +22,7 @@ use crate::{
     buffer::{ArrayPtr, Buffer, BufferMut, BufferWithMetadata, DynBuffer},
     macros::is,
     msrv::{ptr, BoxExt, NonZero},
-    utils::slice_into_raw_parts,
+    utils::{slice_into_raw_parts, NewChecked},
 };
 
 const MAX_REFCOUNT: usize = isize::MAX as usize;
@@ -116,8 +116,8 @@ impl<T> From<Vec<T>> for CompactVec<T> {
         let mut vec = ManuallyDrop::new(value);
 
         CompactVec {
-            start: NonNull::new(vec.as_mut_ptr()).unwrap(),
-            capacity: unsafe { NonZero::new_unchecked(vec.capacity()) },
+            start: NonNull::new_checked(vec.as_mut_ptr()),
+            capacity: NonZero::new_checked(vec.capacity()),
         }
     }
 }
@@ -263,7 +263,7 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
             _phantom: PhantomData,
         };
         let slice_ptr = slice(&mut unsafe { inner_ptr.as_mut() }.buffer);
-        (arc, NonNull::new(slice_ptr.cast()).unwrap())
+        (arc, NonNull::new_checked(slice_ptr.cast()))
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> (Self, NonNull<T>) {
@@ -341,7 +341,7 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         match self.vtable_or_capa() {
             VTableOrCapacity::VTable(vtable) => {
                 let mut buffer = MaybeUninit::<B>::uninit();
-                let buffer_ptr = NonNull::new(buffer.as_mut_ptr()).unwrap().cast();
+                let buffer_ptr = NonNull::new_checked(buffer.as_mut_ptr()).cast();
                 let type_id = TypeId::of::<B>();
                 if let Some(buffer_ptr) = unsafe {
                     (vtable.take_buffer)(buffer_ptr, self.inner, type_id, start.cast(), length)
@@ -353,7 +353,7 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
                 if length == capacity {
                     let slice = ptr::slice_from_raw_parts_mut(start.as_ptr(), length);
                     if let Some(buffer) = unsafe { B::try_from_array(ArrayPtr(slice)) } {
-                        let layout = Self::slice_layout(capacity).unwrap();
+                        let layout = unsafe { Self::slice_layout(capacity).unwrap_unchecked() };
                         unsafe { dealloc(self.inner.as_ptr().cast(), layout) };
                         return Ok(buffer);
                     }
@@ -372,7 +372,7 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
                         unsafe { self.inner.cast::<ArcInner<WithLength<[T; 0]>>>().as_mut() };
                     unsafe { ptr::drop_in_place(inner.buffer.as_mut_slice()) };
                 }
-                let layout = Self::slice_layout(capacity).unwrap();
+                let layout = unsafe { Self::slice_layout(capacity).unwrap_unchecked() };
                 unsafe { dealloc(self.inner.as_ptr().cast(), layout) };
             }
         }

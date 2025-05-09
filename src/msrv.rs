@@ -3,6 +3,7 @@ use core::num::NonZeroUsize;
 
 use ptr::NonNull;
 
+use crate::utils::{NewChecked, UnwrapChecked};
 // 1.82: `addr_of[_mut]` --> `&raw [mut]`
 // 1.85: const `NonNull::new_unchecked` -> const `NonNull::new`
 
@@ -70,12 +71,12 @@ impl<T> StrictProvenance<T> for *mut T {
 }
 
 impl<T> StrictProvenance<T> for NonNull<T> {
-    type Addr = NonZero<usize>;
+    type Addr = NonZeroUsize;
     fn addr(self) -> Self::Addr {
-        NonZero::new(self.as_ptr().addr()).unwrap()
+        NonZeroUsize::new(self.as_ptr().addr()).unwrap_checked()
     }
     fn with_addr(self, addr: Self::Addr) -> Self {
-        unsafe { NonNull::new_unchecked(self.as_ptr().with_addr(addr.get())) }
+        NonNull::new_checked(self.as_ptr().with_addr(addr.get()))
     }
 }
 
@@ -161,7 +162,7 @@ pub(crate) trait NonNullExt<T>: Sized + Copy {
 
 impl<T> NonNullExt<T> for NonNull<T> {
     unsafe fn add(self, count: usize) -> NonNull<T> {
-        unsafe { NonNull::new_unchecked(self.as_ptr().add(count)) }
+        unsafe { NonNull::new_checked(self.as_ptr().add(count)) }
     }
 
     unsafe fn read(self) -> T {
@@ -180,7 +181,7 @@ pub(crate) trait BoxExt<T: ?Sized> {
 
 impl<T: ?Sized> BoxExt<T> for Box<T> {
     fn into_non_null(this: Self) -> NonNull<T> {
-        NonNull::new(Box::into_raw(this)).unwrap()
+        NonNull::new_checked(Box::into_raw(this))
     }
 
     unsafe fn from_non_null(ptr: NonNull<T>) -> Self {

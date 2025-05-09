@@ -18,6 +18,7 @@ use crate::{
     layout::AnyBufferLayout,
     macros::{is, is_not},
     str::ArcStr,
+    utils::NewChecked,
     ArcSlice,
 };
 
@@ -208,7 +209,7 @@ pub unsafe trait BufferMut<T>: Buffer<T> {
 unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
     #[inline]
     fn as_mut_ptr(&mut self) -> NonNull<T> {
-        NonNull::new(self.as_mut_ptr()).unwrap()
+        NonNull::new_checked(self.as_mut_ptr())
     }
 
     #[inline]
@@ -238,7 +239,7 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
 unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
     #[inline]
     fn as_mut_ptr(&mut self) -> NonNull<T> {
-        NonNull::new(self.as_mut_slice().as_mut_ptr()).unwrap()
+        NonNull::new_checked(self.as_mut_slice().as_mut_ptr())
     }
 
     #[inline]

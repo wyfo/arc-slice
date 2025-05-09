@@ -6,9 +6,12 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::macros::{is, is_not};
 #[allow(unused_imports)]
 use crate::msrv::ConstPtrExt;
+use crate::{
+    macros::{is, is_not},
+    msrv::{NonZero, Zeroable},
+};
 
 #[inline(always)]
 pub(crate) fn try_transmute<T: Any, U: Any>(any: T) -> Result<U, T> {
@@ -152,4 +155,61 @@ pub(crate) fn abort() -> ! {
         let _guard = Abort;
         panic!("abort");
     }
+}
+
+extern "C" {
+    #[link_name = "__arc_slice__unreachable_checked__"]
+    fn __unreachable_checked() -> !;
+}
+
+pub(crate) fn unreachable_checked() -> ! {
+    unsafe { __unreachable_checked() }
+}
+
+pub(crate) trait UnwrapChecked<T> {
+    fn unwrap_checked(self) -> T;
+}
+
+impl<T> UnwrapChecked<T> for Option<T> {
+    fn unwrap_checked(self) -> T {
+        match self {
+            Some(x) => x,
+            #[cfg(debug_assertions)]
+            _ => unreachable!(),
+            #[cfg(not(debug_assertions))]
+            _ => unsafe { __unreachable_checked() },
+        }
+    }
+}
+
+impl<T, E> UnwrapChecked<T> for Result<T, E> {
+    fn unwrap_checked(self) -> T {
+        match self {
+            Ok(x) => x,
+            #[cfg(debug_assertions)]
+            _ => unreachable!(),
+            #[cfg(not(debug_assertions))]
+            _ => unsafe { __unreachable_checked() },
+        }
+    }
+}
+
+pub(crate) trait NewChecked<Arg> {
+    fn new_checked(arg: Arg) -> Self;
+}
+
+impl<T: ?Sized> NewChecked<*mut T> for NonNull<T> {
+    fn new_checked(arg: *mut T) -> Self {
+        Self::new(arg).unwrap_checked()
+    }
+}
+
+impl<T: Zeroable> NewChecked<T> for NonZero<T> {
+    fn new_checked(arg: T) -> Self {
+        NonZero::new(arg).unwrap_checked()
+    }
+}
+#[inline(always)]
+pub(crate) fn transmute_checked<T: Any, U: Any>(any: T) -> U {
+    try_transmute(any).unwrap_checked()
 }

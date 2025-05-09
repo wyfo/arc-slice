@@ -23,7 +23,7 @@ use crate::{
     },
     msrv::ptr,
     str::check_char_boundary,
-    utils::{debug_slice, lower_hex, offset_len, panic_out_of_range, upper_hex},
+    utils::{debug_slice, lower_hex, offset_len, panic_out_of_range, upper_hex, UnwrapChecked},
     ArcBytes, ArcStr,
 };
 
@@ -190,7 +190,7 @@ impl<L: Layout> Borrow<[u8]> for SmallBytes<L> {
 impl<L: Layout> Default for SmallBytes<L> {
     #[inline]
     fn default() -> Self {
-        Self::new(&[]).unwrap()
+        Self::new(&[]).unwrap_checked()
     }
 }
 
@@ -598,7 +598,7 @@ impl<L: Layout> Borrow<str> for SmallStr<L> {
 impl<L: Layout> Default for SmallStr<L> {
     #[inline]
     fn default() -> Self {
-        Self::new("").unwrap()
+        Self::new("").unwrap_checked()
     }
 }
 

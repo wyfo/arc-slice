@@ -17,7 +17,7 @@ use crate::{
     error::FromUtf8Error,
     layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, StaticLayout},
     macros::is,
-    utils::{offset_len, try_transmute},
+    utils::{offset_len, transmute_checked},
     ArcBytes, ArcBytesBorrow,
 };
 
@@ -149,14 +149,18 @@ impl<L: Layout> ArcStr<L> {
     pub fn try_into_buffer<B: StringBuffer>(self) -> Result<B, Self> {
         if is!(B, &'static str) {
             let slice = self.0.try_into_buffer::<&'static [u8]>().map_err(Self)?;
-            return Ok(try_transmute(unsafe { core::str::from_utf8_unchecked(slice) }).unwrap());
+            return Ok(transmute_checked(unsafe {
+                core::str::from_utf8_unchecked(slice)
+            }));
         } else if is!(B, Box<str>) {
             let boxed_slice = self.0.try_into_buffer::<Box<[u8]>>().map_err(Self)?;
             let string = unsafe { String::from_utf8_unchecked(boxed_slice.into()) };
-            return Ok(try_transmute(string.into_boxed_str()).unwrap());
+            return Ok(transmute_checked(string.into_boxed_str()));
         } else if is!(B, String) {
             let vec = self.0.try_into_buffer::<Vec<u8>>().map_err(Self)?;
-            return Ok(try_transmute(unsafe { String::from_utf8_unchecked(vec) }).unwrap());
+            return Ok(transmute_checked(unsafe {
+                String::from_utf8_unchecked(vec)
+            }));
         }
         self.0
             .try_into_buffer::<StringBufferWrapper<B>>()

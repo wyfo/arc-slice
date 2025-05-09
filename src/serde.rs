@@ -6,7 +6,7 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     layout::Layout,
     macros::is,
-    utils::{try_transmute, try_transmute_slice},
+    utils::{try_transmute, try_transmute_slice, UnwrapChecked},
     ArcSlice, ArcSliceMut, ArcStr,
 };
 
@@ -145,7 +145,7 @@ impl<L: Layout> de::Visitor<'_> for ArcStrVisitor<L> {
     where
         E: de::Error,
     {
-        Ok(v.parse().unwrap())
+        Ok(v.parse().unwrap_checked())
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
@@ -232,7 +232,7 @@ const _: () = {
         where
             E: de::Error,
         {
-            Ok(v.parse().unwrap())
+            Ok(v.parse().unwrap_checked())
         }
 
         fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
