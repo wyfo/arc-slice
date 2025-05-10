@@ -19,7 +19,7 @@ use crate::msrv::ConstPtrExt;
 use crate::msrv::{ptr, NonNullExt, StrictProvenance};
 use crate::{
     arc::Arc,
-    buffer::{BorrowMetadata, Buffer, BufferWithMetadata, DynBuffer},
+    buffer::{BorrowMetadata, Buffer, BufferMut, BufferWithMetadata, DynBuffer},
     layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, StaticLayout},
     macros::is,
     utils::{
@@ -58,11 +58,10 @@ pub trait ArcSliceLayout: 'static {
         length: usize,
         data: &Self::Data,
     ) -> Self::Data;
-    unsafe fn drop<T>(
+    unsafe fn drop<T, const UNIQUE_HINT: bool>(
         start: NonNull<T>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-        unique_hint: bool,
     );
     fn borrowed_data<T>(_data: &Self::Data) -> Option<*const ()> {
         None
@@ -307,7 +306,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
 
     pub fn drop_with_unique_hint(self) {
         let mut this = ManuallyDrop::new(self);
-        unsafe { L::drop(this.start, this.length, &mut this.data, true) };
+        unsafe { L::drop::<T, true>(this.start, this.length, &mut this.data) };
     }
 }
 
@@ -380,7 +379,7 @@ impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
     }
 
     pub(crate) fn from_vec(vec: Vec<T>) -> Self {
-        if vec.is_empty() {
+        if vec.capacity() == 0 {
             return Self::new_array([]);
         }
         let (start, length) = slice_into_raw_parts(&vec);
@@ -391,7 +390,7 @@ impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
 impl<T: Send + Sync + 'static, L: Layout> Drop for ArcSlice<T, L> {
     #[inline]
     fn drop(&mut self) {
-        unsafe { L::drop(self.start, self.length, &mut self.data, false) };
+        unsafe { L::drop::<T, false>(self.start, self.length, &mut self.data) };
     }
 }
 

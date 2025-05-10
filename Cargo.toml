@@ -21,9 +21,10 @@ repository = "https://github.com/wyfo/arc-slice"
 
 [features]
 default = ["std", "const-slice"]
+abort-on-refcount-overflow = []
 const-slice = []
 inlined = ["either"] # MSRV use dep:
-abort-on-refcount-overflow = []
+# MSRV make a portable-atomic-util feature including portable-atomic
 raw-buffer = []
 std = ["abort-on-refcount-overflow"]
 # default layout
@@ -36,7 +37,6 @@ default-layout-mut-any-buffer = []
 default-layout-mut-vec = []
 
 [dependencies]
-no-panic = "0.1.35"
 bytes = { version = "1", optional = true }
 cfg-if = "1"
 either = { version = "1", optional = true }

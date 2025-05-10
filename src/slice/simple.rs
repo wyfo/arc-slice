@@ -1,5 +1,10 @@
 use alloc::vec::Vec;
-use core::{any::Any, hint, mem, mem::ManuallyDrop, ptr::NonNull};
+use core::{
+    any::Any,
+    hint, mem,
+    mem::{ManuallyDrop, MaybeUninit},
+    ptr::NonNull,
+};
 
 #[allow(unused_imports)]
 use crate::msrv::{ConstPtrExt, OptionExt};
@@ -27,7 +32,8 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
 {
     type Data = Option<NonNull<()>>;
 
-    const STATIC_DATA: Option<Self::Data> = None;
+    const STATIC_DATA: Option<Self::Data> = if STATIC { Some(None) } else { None };
+    const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::new(None);
 
     fn data_from_arc<T>(arc: Arc<T>) -> Self::Data {
         Some(arc.into_raw())
@@ -41,14 +47,13 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         Self::arc::<T>(data).map(|arc| (*arc).clone().into_raw())
     }
 
-    unsafe fn drop<T>(
+    unsafe fn drop<T, const UNIQUE_HINT: bool>(
         _start: NonNull<T>,
         _length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-        unique_hint: bool,
     ) {
         if let Some(arc) = Self::arc::<T>(data) {
-            ManuallyDrop::into_inner(arc).drop(unique_hint);
+            ManuallyDrop::into_inner(arc).drop::<UNIQUE_HINT>();
         }
     }
 

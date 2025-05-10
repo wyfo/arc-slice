@@ -162,8 +162,21 @@ extern "C" {
     fn __unreachable_checked() -> !;
 }
 
+#[inline(always)]
 pub(crate) fn unreachable_checked() -> ! {
-    unsafe { __unreachable_checked() }
+    #[cfg(debug_assertions)]
+    unreachable!();
+    #[cfg(not(debug_assertions))]
+    unsafe {
+        __unreachable_checked()
+    };
+}
+
+#[inline(always)]
+pub(crate) fn assert_checked(predicate: bool) {
+    if !predicate {
+        unreachable_checked();
+    }
 }
 
 pub(crate) trait UnwrapChecked<T> {
@@ -171,26 +184,16 @@ pub(crate) trait UnwrapChecked<T> {
 }
 
 impl<T> UnwrapChecked<T> for Option<T> {
+    #[inline(always)]
     fn unwrap_checked(self) -> T {
-        match self {
-            Some(x) => x,
-            #[cfg(debug_assertions)]
-            _ => unreachable!(),
-            #[cfg(not(debug_assertions))]
-            _ => unsafe { __unreachable_checked() },
-        }
+        self.unwrap_or_else(|| unreachable_checked())
     }
 }
 
 impl<T, E> UnwrapChecked<T> for Result<T, E> {
+    #[inline(always)]
     fn unwrap_checked(self) -> T {
-        match self {
-            Ok(x) => x,
-            #[cfg(debug_assertions)]
-            _ => unreachable!(),
-            #[cfg(not(debug_assertions))]
-            _ => unsafe { __unreachable_checked() },
-        }
+        self.unwrap_or_else(|_| unreachable_checked())
     }
 }
 
@@ -199,16 +202,19 @@ pub(crate) trait NewChecked<Arg> {
 }
 
 impl<T: ?Sized> NewChecked<*mut T> for NonNull<T> {
+    #[inline(always)]
     fn new_checked(arg: *mut T) -> Self {
         Self::new(arg).unwrap_checked()
     }
 }
 
 impl<T: Zeroable> NewChecked<T> for NonZero<T> {
+    #[inline(always)]
     fn new_checked(arg: T) -> Self {
         NonZero::new(arg).unwrap_checked()
     }
 }
+
 #[inline(always)]
 pub(crate) fn transmute_checked<T: Any, U: Any>(any: T) -> U {
     try_transmute(any).unwrap_checked()

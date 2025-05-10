@@ -194,11 +194,10 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         (new_ptr, MaybeUninit::uninit())
     }
 
-    unsafe fn drop<T>(
+    unsafe fn drop<T, const UNIQUE_HINT: bool>(
         start: NonNull<T>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-        unique_hint: bool,
     ) {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
@@ -206,7 +205,7 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
             Data::Capacity(capacity) => {
                 drop(unsafe { Self::rebuild_vec(start, length, capacity, *base) });
             }
-            Data::Arc(arc) => ManuallyDrop::into_inner(arc).drop(unique_hint),
+            Data::Arc(arc) => ManuallyDrop::into_inner(arc).drop::<UNIQUE_HINT>(),
         }
     }
 
