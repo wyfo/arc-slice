@@ -12,3 +12,12 @@ macro_rules! is_not {
     ($($tt:tt)*) => { !crate::macros::is!($($tt)*) };
 }
 pub(crate) use is_not;
+
+macro_rules! assume {
+    ($predicate:expr) => {
+        if !$predicate {
+            core::hint::unreachable_unchecked();
+        }
+    };
+}
+pub(crate) use assume;

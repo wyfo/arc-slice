@@ -1,6 +1,7 @@
 use alloc::{
-    alloc::{alloc, dealloc, handle_alloc_error},
+    alloc::{alloc, alloc_zeroed, dealloc, handle_alloc_error},
     boxed::Box,
+    slice,
     vec::Vec,
 };
 use core::{
@@ -9,19 +10,20 @@ use core::{
     marker::PhantomData,
     mem,
     mem::{ManuallyDrop, MaybeUninit},
-    ops::{Deref, DerefMut},
     ptr::{addr_of_mut, NonNull},
     sync::atomic::Ordering,
 };
 
 #[allow(unused_imports)]
-use crate::msrv::{ConstPtrExt, NonNullExt, StrictProvenance};
+use crate::msrv::{BoxExt, ConstPtrExt, NonNullExt, StrictProvenance};
 use crate::{
     atomic,
     atomic::AtomicUsize,
-    buffer::{ArrayPtr, Buffer, BufferMut, BufferWithMetadata, DynBuffer},
+    buffer::{ArrayPtr, Buffer, BufferMut, BufferMutExt, BufferWithMetadata, DynBuffer},
+    error::TryReserveError,
     macros::is,
-    msrv::{ptr, BoxExt, NonZero},
+    msrv::{ptr, NonZero, SubPtrExt},
+    slice_mut::TryReserveResult,
     utils::{assert_checked, slice_into_raw_parts, NewChecked},
 };
 
@@ -41,6 +43,8 @@ struct ArcInner<B> {
     buffer: B,
 }
 
+type ErasedArc = NonNull<ArcInner<()>>;
+
 #[repr(C)]
 struct WithLength<B> {
     length: usize,
@@ -53,11 +57,6 @@ impl<T> WithLength<[T; 0]> {
             length: 0,
             buffer: [],
         }
-    }
-
-    fn as_mut_slice(&mut self) -> *mut [T] {
-        // use `as_mut_slice` to avoid confusion with `BufferMut::as_mut_ptr`
-        ptr::slice_from_raw_parts_mut(self.buffer.as_mut_slice().as_mut_ptr(), self.length)
     }
 }
 
@@ -86,15 +85,16 @@ impl<T> CompactVec<T> {
     where
         T: Send + Sync + 'static,
     {
-        let vec = &unsafe { arc.cast::<ArcInner<Self>>().as_ref() }.buffer;
-        let capacity = vec.capacity.get();
+        let arc_buffer = &unsafe { arc.cast::<ArcInner<Self>>().as_ref() }.buffer;
+        let capacity = arc_buffer.capacity.get();
         if is!({ type_id }, Vec<T>) {
-            if start.cast::<T>() != vec.start {
-                unsafe { ptr::copy(start.cast::<T>().as_ptr(), vec.start.as_ptr(), length) };
+            if start.cast::<T>() != arc_buffer.start {
+                let start = start.cast::<T>().as_ptr();
+                unsafe { ptr::copy(start, arc_buffer.start.as_ptr(), length) };
             }
-            unsafe { buffer.cast().write(vec.to_vec(length)) };
+            unsafe { buffer.cast().write(arc_buffer.to_vec(length)) };
         } else if is!({ type_id }, Box<[T]>) && length == capacity {
-            let slice = ptr::slice_from_raw_parts_mut(vec.start.as_ptr(), capacity);
+            let slice = ptr::slice_from_raw_parts_mut(arc_buffer.start.as_ptr(), capacity);
             unsafe { buffer.cast().write(Box::from_raw(slice)) };
         } else {
             return None;
@@ -102,11 +102,77 @@ impl<T> CompactVec<T> {
         drop(unsafe { Box::from_non_null(arc.cast::<ArcInner<MaybeUninit<Self>>>()) });
         Some(buffer)
     }
+
+    #[allow(unstable_name_collisions)]
+    unsafe fn capacity(arc: ErasedArc, start: NonNull<()>) -> usize {
+        let buffer = &unsafe { arc.cast::<ArcInner<Self>>().as_ref() }.buffer;
+        let offset = unsafe { start.cast().sub_ptr(buffer.start) };
+        buffer.capacity.get() - offset
+    }
+
+    #[allow(unstable_name_collisions)]
+    unsafe fn try_reserve(
+        arc: ErasedArc,
+        start: NonNull<()>,
+        length: usize,
+        additional: usize,
+        allocate: bool,
+    ) -> TryReserveResult<()>
+    where
+        T: Send + Sync + 'static,
+    {
+        struct ArcCompactVec<T> {
+            arc: ManuallyDrop<Box<ArcInner<CompactVec<T>>>>,
+            length: usize,
+        }
+        unsafe impl<T: Send> Send for ArcCompactVec<T> {}
+        impl<T: Send + 'static> Buffer<T> for ArcCompactVec<T> {
+            fn as_slice(&self) -> &[T] {
+                unsafe { slice::from_raw_parts(self.arc.buffer.start.as_ptr(), self.length) }
+            }
+        }
+        unsafe impl<T: Send + 'static> BufferMut<T> for ArcCompactVec<T> {
+            fn as_mut_ptr(&mut self) -> NonNull<T> {
+                self.arc.buffer.start
+            }
+
+            fn len(&self) -> usize {
+                self.length
+            }
+
+            fn capacity(&self) -> usize {
+                self.arc.buffer.capacity.get()
+            }
+
+            unsafe fn set_len(&mut self, len: usize) -> bool {
+                self.length = len;
+                true
+            }
+
+            fn reserve(&mut self, additional: usize) -> bool {
+                let (start, capacity) = unsafe {
+                    self.realloc(additional, self.arc.buffer.start.cast(), Layout::array::<T>)
+                };
+                self.arc.buffer.start = start.cast();
+                self.arc.buffer.capacity = unsafe { NonZero::new_unchecked(capacity) };
+                true
+            }
+        }
+        let arc = ManuallyDrop::new(unsafe { Box::from_non_null(arc.cast::<ArcInner<Self>>()) });
+        let offset = unsafe { start.cast().sub_ptr(arc.buffer.start) };
+        let mut buffer = ArcCompactVec {
+            arc,
+            length: offset + length,
+        };
+        let (capacity, start) =
+            unsafe { buffer.try_reserve_impl(offset, length, additional, allocate) };
+        (capacity, start.cast())
+    }
 }
 
 impl<T> Drop for CompactVec<T> {
     fn drop(&mut self) {
-        drop(unsafe { Vec::from_raw_parts(self.start.as_ptr(), 0, self.capacity.get()) });
+        drop(unsafe { self.to_vec(0) });
     }
 }
 
@@ -131,6 +197,9 @@ struct ArcVTable {
     get_metadata: Option<unsafe fn(ErasedArc, TypeId) -> Option<NonNull<()>>>,
     take_buffer:
         unsafe fn(NonNull<()>, ErasedArc, TypeId, NonNull<()>, usize) -> Option<NonNull<()>>,
+    capacity: Option<unsafe fn(ErasedArc, NonNull<()>) -> usize>,
+    try_reserve:
+        Option<unsafe fn(ErasedArc, NonNull<()>, usize, usize, bool) -> TryReserveResult<()>>,
 }
 
 impl ArcVTable {
@@ -140,15 +209,13 @@ impl ArcVTable {
     }
 
     unsafe fn is_unique<T, B: Buffer<T>>(arc: ErasedArc) -> bool {
-        unsafe { arc.cast::<ArcInner<B>>().as_ref() }
-            .buffer
-            .is_unique()
+        let buffer = &unsafe { arc.cast::<ArcInner<B>>().as_ref() }.buffer;
+        buffer.is_unique()
     }
 
     unsafe fn get_metadata<B: DynBuffer>(arc: ErasedArc, type_id: TypeId) -> Option<NonNull<()>> {
-        unsafe { arc.cast::<ArcInner<B>>().as_ref() }
-            .buffer
-            .get_metadata(type_id)
+        let buffer = &unsafe { arc.cast::<ArcInner<B>>().as_ref() }.buffer;
+        buffer.get_metadata(type_id)
     }
 
     #[allow(unstable_name_collisions)]
@@ -169,6 +236,33 @@ impl ArcVTable {
         None
     }
 
+    #[allow(unstable_name_collisions)]
+    unsafe fn capacity<T, B: BufferMut<T>>(arc: ErasedArc, start: NonNull<()>) -> usize {
+        let buffer = &unsafe { arc.cast::<ArcInner<B>>().as_ref() }.buffer;
+        let (buffer_start, _) = slice_into_raw_parts(buffer.as_slice());
+        let offset = unsafe { start.cast().sub_ptr(buffer_start) };
+        buffer.capacity() - offset
+    }
+
+    #[allow(unstable_name_collisions)]
+    unsafe fn try_reserve<T, B: BufferMut<T>>(
+        arc: ErasedArc,
+        start: NonNull<()>,
+        length: usize,
+        additional: usize,
+        allocate: bool,
+    ) -> TryReserveResult<()> {
+        let buffer = &mut unsafe { arc.cast::<ArcInner<B>>().as_mut() }.buffer;
+        let (buffer_start, buffer_length) = slice_into_raw_parts(buffer.as_slice());
+        let offset = unsafe { start.cast().sub_ptr(buffer_start) };
+        if mem::needs_drop::<T>() && buffer_length != offset + length {
+            return (Err(TryReserveError::Unsupported), start);
+        }
+        let (capacity, start) =
+            unsafe { buffer.try_reserve_impl(offset, length, additional, allocate) };
+        (capacity, start.cast())
+    }
+
     fn new<T, B: DynBuffer + Buffer<T>>() -> &'static Self {
         if B::has_metadata() {
             &Self {
@@ -176,6 +270,8 @@ impl ArcVTable {
                 is_unique: Self::is_unique::<T, B>,
                 get_metadata: Some(Self::get_metadata::<B>),
                 take_buffer: Self::take_buffer::<T, B>,
+                capacity: None,
+                try_reserve: None,
             }
         } else {
             &Self {
@@ -183,6 +279,8 @@ impl ArcVTable {
                 is_unique: Self::is_unique::<T, B>,
                 get_metadata: None,
                 take_buffer: Self::take_buffer::<T, B>,
+                capacity: None,
+                try_reserve: None,
             }
         }
     }
@@ -194,6 +292,8 @@ impl ArcVTable {
                 is_unique: Self::is_unique::<T, B>,
                 get_metadata: Some(Self::get_metadata::<B>),
                 take_buffer: Self::take_buffer::<T, B>,
+                capacity: Some(Self::capacity::<T, B>),
+                try_reserve: Some(Self::try_reserve::<T, B>),
             }
         } else {
             &Self {
@@ -201,6 +301,8 @@ impl ArcVTable {
                 is_unique: Self::is_unique::<T, B>,
                 get_metadata: None,
                 take_buffer: Self::take_buffer::<T, B>,
+                capacity: Some(Self::capacity::<T, B>),
+                try_reserve: Some(Self::try_reserve::<T, B>),
             }
         }
     }
@@ -214,6 +316,8 @@ impl ArcVTable {
             is_unique: CompactVec::<T>::is_unique,
             get_metadata: None,
             take_buffer: CompactVec::<T>::take_buffer,
+            capacity: Some(CompactVec::<T>::capacity),
+            try_reserve: Some(CompactVec::<T>::try_reserve),
         }
     }
 }
@@ -223,7 +327,6 @@ enum VTableOrCapacity {
     Capacity(usize),
 }
 
-type ErasedArc = NonNull<ArcInner<()>>;
 #[allow(missing_debug_implementations)]
 pub struct Arc<T, const ANY_BUFFER: bool = true> {
     inner: ErasedArc,
@@ -241,11 +344,17 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         Ok(layout)
     }
 
-    fn allocate_slice<B>(capacity: usize, buffer: B) -> Self {
+    fn allocate_slice<B, const ZEROED: bool>(capacity: usize, buffer: B) -> Self {
         let layout = Self::slice_layout(capacity).expect("capacity overflow");
-        let mut inner_ptr = NonNull::new(unsafe { alloc(layout) })
-            .unwrap_or_else(|| handle_alloc_error(layout))
-            .cast();
+        let inner_ptr = NonNull::new(unsafe {
+            if ZEROED {
+                alloc(layout)
+            } else {
+                alloc_zeroed(layout)
+            }
+        })
+        .unwrap_or_else(|| handle_alloc_error(layout))
+        .cast();
         let inner = ArcInner {
             refcount: AtomicUsize::new(1),
             vtable_or_capacity: ptr::without_provenance(capacity),
@@ -258,15 +367,17 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         }
     }
 
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        if mem::needs_drop::<T>() {
-            Self::allocate_slice(capacity, WithLength::<[T; 0]>::new())
+    pub(crate) fn with_capacity<const ZEROED: bool>(capacity: usize) -> (Self, NonNull<T>) {
+        let arc = if mem::needs_drop::<T>() {
+            Self::allocate_slice::<WithLength<[T; 0]>, ZEROED>(capacity, WithLength::new())
         } else {
-            Self::allocate_slice::<[T; 0]>(capacity, [])
-        }
+            Self::allocate_slice::<[T; 0], ZEROED>(capacity, [])
+        };
+        let start = unsafe { arc.slice_start() };
+        (arc, start)
     }
 
-    fn start_ptr(&self) -> NonNull<T> {
+    unsafe fn slice_start(&self) -> NonNull<T> {
         NonNull::new_checked(if mem::needs_drop::<T>() {
             let inner = self.inner.cast::<ArcInner<WithLength<[T; 0]>>>().as_ptr();
             unsafe { addr_of_mut!((*inner).buffer.buffer) }
@@ -277,20 +388,27 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         .cast()
     }
 
+    unsafe fn slice_length(&self) -> Option<usize> {
+        if mem::needs_drop::<T>() {
+            let inner = unsafe { self.inner.cast::<ArcInner<WithLength<[T; 0]>>>().as_ref() };
+            Some(inner.buffer.length)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn new(slice: &[T]) -> (Self, NonNull<T>)
     where
         T: Copy,
     {
-        let arc = Self::with_capacity(slice.len());
-        let start = arc.start_ptr();
+        let (arc, start) = Self::with_capacity::<false>(slice.len());
         unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), start.as_ptr(), slice.len()) };
         (arc, start)
     }
 
     pub(crate) fn new_array<const N: usize>(array: [T; N]) -> (Self, NonNull<T>) {
         let array = ManuallyDrop::new(array);
-        let arc = Self::with_capacity(N);
-        let start = arc.start_ptr();
+        let (arc, start) = Self::with_capacity::<false>(N);
         unsafe { ptr::copy_nonoverlapping(array.as_ptr(), start.as_ptr(), N) };
         (arc, start)
     }
@@ -306,7 +424,7 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         }
     }
 
-    fn vtable_or_capa(&self) -> VTableOrCapacity {
+    fn vtable_or_capacity(&self) -> VTableOrCapacity {
         let ptr = unsafe { self.inner.as_ref().vtable_or_capacity };
         if ANY_BUFFER && ptr.addr() & VTABLE_FLAG != 0 {
             VTableOrCapacity::VTable(unsafe { &*ptr.with_addr(ptr.addr() << VTABLE_SHIFT).cast() })
@@ -315,17 +433,22 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         }
     }
 
-    pub(crate) fn is_unique(&self) -> bool {
+    pub(crate) fn is_unique(&mut self) -> bool {
+        let inner = unsafe { self.inner.as_ref() };
+        inner.refcount.load(Ordering::Acquire) == 1
+    }
+
+    pub(crate) fn is_buffer_unique(&self) -> bool {
         let inner = unsafe { self.inner.as_ref() };
         inner.refcount.load(Ordering::Relaxed) == 1
-            && match self.vtable_or_capa() {
+            && match self.vtable_or_capacity() {
                 VTableOrCapacity::VTable(vtable) => unsafe { (vtable.is_unique)(self.inner) },
                 VTableOrCapacity::Capacity(_) => true,
             }
     }
 
     pub(crate) fn get_metadata<M: Any>(&self) -> Option<&M> {
-        match self.vtable_or_capa() {
+        match self.vtable_or_capacity() {
             VTableOrCapacity::VTable(vtable) => unsafe {
                 let metadata = vtable.get_metadata?(self.inner, TypeId::of::<M>())?;
                 Some(metadata.cast().as_ref())
@@ -335,21 +458,21 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
     }
 
     pub(crate) fn take_buffer<B: Buffer<T>>(
-        self,
+        mut self,
         start: NonNull<T>,
         length: usize,
     ) -> Result<B, Self> {
-        let inner = unsafe { self.inner.as_ref() };
-        if inner.refcount.load(Ordering::Acquire) != 1 {
+        if !self.is_unique() {
             return Err(self);
         }
-        match self.vtable_or_capa() {
+        let this = ManuallyDrop::new(self);
+        match this.vtable_or_capacity() {
             VTableOrCapacity::VTable(vtable) => {
                 let mut buffer = MaybeUninit::<B>::uninit();
                 let buffer_ptr = NonNull::new_checked(buffer.as_mut_ptr()).cast();
                 let type_id = TypeId::of::<B>();
                 if let Some(buffer_ptr) = unsafe {
-                    (vtable.take_buffer)(buffer_ptr, self.inner, type_id, start.cast(), length)
+                    (vtable.take_buffer)(buffer_ptr, this.inner, type_id, start.cast(), length)
                 } {
                     return unsafe { buffer_ptr.cast().read() };
                 }
@@ -359,24 +482,123 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
                     let slice = ptr::slice_from_raw_parts_mut(start.as_ptr(), length);
                     if let Some(buffer) = unsafe { B::try_from_array(ArrayPtr(slice)) } {
                         let layout = unsafe { Self::slice_layout(capacity).unwrap_unchecked() };
-                        unsafe { dealloc(self.inner.as_ptr().cast(), layout) };
+                        unsafe { dealloc(this.inner.as_ptr().cast(), layout) };
                         return Ok(buffer);
                     }
                 }
             }
         }
-        Err(self)
+        Err(ManuallyDrop::into_inner(this))
+    }
+
+    #[allow(unstable_name_collisions)]
+    pub(crate) unsafe fn capacity(&self, start: NonNull<T>) -> Option<usize> {
+        match self.vtable_or_capacity() {
+            VTableOrCapacity::VTable(vtable) => {
+                Some(unsafe { vtable.capacity?(self.inner, start.cast()) })
+            }
+            VTableOrCapacity::Capacity(capacity) => {
+                Some(capacity - unsafe { start.sub_ptr(self.slice_start()) })
+            }
+        }
+    }
+
+    #[allow(unstable_name_collisions)]
+    pub(crate) unsafe fn try_reserve(
+        &mut self,
+        start: NonNull<T>,
+        length: usize,
+        additional: usize,
+        allocate: bool,
+    ) -> TryReserveResult<T>
+    where
+        T: Send + Sync + 'static,
+    {
+        if !self.is_unique() {
+            return (Err(TryReserveError::NotUnique), start);
+        }
+        match self.vtable_or_capacity() {
+            VTableOrCapacity::VTable(vtable) => {
+                let (capacity, start) = unsafe {
+                    let try_reserve = vtable.try_reserve.unwrap_unchecked();
+                    try_reserve(self.inner, start.cast(), length, additional, allocate)
+                };
+                (capacity, start.cast())
+            }
+            VTableOrCapacity::Capacity(_) => {
+                let offset = unsafe { start.sub_ptr(self.slice_start()) };
+                if let Some(slice_length) = unsafe { self.slice_length() } {
+                    if offset + length != slice_length {
+                        return (Err(TryReserveError::Unsupported), start);
+                    }
+                }
+                struct ArcSlice<T> {
+                    arc: ManuallyDrop<Arc<T, false>>,
+                    length: usize,
+                }
+                impl<T: Send + Sync + 'static> Buffer<T> for ArcSlice<T> {
+                    fn as_slice(&self) -> &[T] {
+                        unsafe {
+                            slice::from_raw_parts(self.arc.slice_start().as_ptr(), self.length)
+                        }
+                    }
+                }
+                unsafe impl<T: Send + Sync + 'static> BufferMut<T> for ArcSlice<T> {
+                    fn as_mut_ptr(&mut self) -> NonNull<T> {
+                        unsafe { self.arc.slice_start() }
+                    }
+
+                    fn len(&self) -> usize {
+                        self.length
+                    }
+
+                    fn capacity(&self) -> usize {
+                        match self.arc.vtable_or_capacity() {
+                            VTableOrCapacity::Capacity(capacity) => capacity,
+                            VTableOrCapacity::VTable(_) => unreachable!(),
+                        }
+                    }
+
+                    unsafe fn set_len(&mut self, len: usize) -> bool {
+                        self.length = len;
+                        true
+                    }
+
+                    fn reserve(&mut self, additional: usize) -> bool {
+                        let (start, capacity) = unsafe {
+                            self.realloc(additional, self.arc.inner.cast(), Arc::<T>::slice_layout)
+                        };
+                        self.arc.inner = start.cast();
+                        unsafe { self.arc.inner.as_mut() }.vtable_or_capacity =
+                            ptr::without_provenance(capacity);
+                        true
+                    }
+                }
+                let mut buffer = ArcSlice {
+                    arc: ManuallyDrop::new(Arc {
+                        inner: self.inner,
+                        _phantom: self._phantom,
+                    }),
+                    length: offset + length,
+                };
+                let res = unsafe { buffer.try_reserve_impl(offset, length, additional, allocate) };
+                self.inner = buffer.arc.inner;
+                res
+            }
+        }
     }
 
     unsafe fn deallocate(&mut self) {
-        match self.vtable_or_capa() {
+        match self.vtable_or_capacity() {
             VTableOrCapacity::VTable(vtable) => unsafe { (vtable.deallocate)(self.inner) },
             VTableOrCapacity::Capacity(capacity) => {
                 if mem::needs_drop::<T>() {
-                    let inner = self.inner.cast::<ArcInner<WithLength<[T; 0]>>>();
-                    let length = unsafe { inner.as_ref().buffer.length };
-                    let slice = ptr::slice_from_raw_parts_mut(self.start_ptr().as_ptr(), length);
-                    unsafe { ptr::drop_in_place(slice) };
+                    unsafe {
+                        ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
+                            self.slice_start().as_ptr(),
+                            self.slice_length().unwrap(),
+                        ));
+                    };
                 }
                 let layout = unsafe { Self::slice_layout(capacity).unwrap_unchecked() };
                 unsafe { dealloc(self.inner.as_ptr().cast(), layout) };
@@ -384,15 +606,19 @@ impl<T, const ANY_BUFFER: bool> Arc<T, ANY_BUFFER> {
         }
     }
 
-    pub(crate) fn drop<const UNIQUE_HINT: bool>(self) {
-        let inner = unsafe { self.inner.as_ref() };
+    pub(crate) fn drop<const UNIQUE_HINT: bool>(mut self) {
         // There is no weak reference, so refcount equal to one means the Arc is truly unique.
         // Acquire ordering synchronizes with a potential release decrease of the refcount,
         // ensuring the data has been used before the following deallocation.
-        if UNIQUE_HINT && inner.refcount.load(Ordering::Acquire) == 1 {
+        if UNIQUE_HINT && self.is_unique() {
             unsafe { ManuallyDrop::new(self).deallocate() };
+        } else {
+            drop(self);
         }
-        // otherwise, the Arc is normally dropped
+    }
+
+    pub(crate) unsafe fn drop_unique(self) {
+        unsafe { ManuallyDrop::new(self).deallocate() };
     }
 }
 
@@ -412,8 +638,9 @@ impl<T> Arc<T> {
         })
     }
 
+    #[allow(unstable_name_collisions)]
     fn new_guard<B>(vtable: &'static ArcVTable, buffer: B) -> ArcGuard<B> {
-        ArcGuard(ManuallyDrop::new(Self::allocate_buffer(1, vtable, buffer)))
+        ArcGuard(Box::into_non_null(Self::allocate_buffer(1, vtable, buffer)))
     }
 
     pub(crate) fn new_vec(vec: Vec<T>) -> Self
@@ -428,7 +655,7 @@ impl<T> Arc<T> {
 
     pub(crate) fn new_buffer<B: DynBuffer + Buffer<T>>(buffer: B) -> (Self, NonNull<T>, usize) {
         let arc = Self::new_guard(ArcVTable::new::<T, B>(), buffer);
-        let (start, length) = slice_into_raw_parts(arc.as_slice());
+        let (start, length) = slice_into_raw_parts(arc.buffer().as_slice());
         (arc.into(), start, length)
     }
 
@@ -436,9 +663,10 @@ impl<T> Arc<T> {
         buffer: B,
     ) -> (Self, NonNull<T>, usize, usize) {
         let mut arc = Self::new_guard(ArcVTable::new_mut::<T, B>(), buffer);
-        let start = arc.as_mut_ptr();
-        let length = arc.len();
-        let capacity = arc.capacity();
+        let buffer = arc.buffer_mut();
+        let start = buffer.as_mut_ptr();
+        let length = buffer.len();
+        let capacity = buffer.capacity();
         (arc.into(), start, length, capacity)
     }
 
@@ -501,33 +729,31 @@ impl<T, const ANY_BUFFER: bool> Clone for Arc<T, ANY_BUFFER> {
     }
 }
 
-struct ArcGuard<B>(ManuallyDrop<Box<ArcInner<B>>>);
+struct ArcGuard<B>(NonNull<ArcInner<B>>);
 
-impl<B> Deref for ArcGuard<B> {
-    type Target = B;
-    fn deref(&self) -> &Self::Target {
-        &self.0.buffer
+impl<B> ArcGuard<B> {
+    fn buffer(&self) -> &B {
+        &unsafe { self.0.as_ref() }.buffer
+    }
+
+    fn buffer_mut(&mut self) -> &mut B {
+        &mut unsafe { self.0.as_mut() }.buffer
     }
 }
 
-impl<B> DerefMut for ArcGuard<B> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0.buffer
-    }
-}
-
+#[allow(unstable_name_collisions)]
 impl<B> Drop for ArcGuard<B> {
     fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) };
+        drop(unsafe { Box::from_non_null(self.0) });
     }
 }
 
 #[allow(unstable_name_collisions)]
 impl<T, B> From<ArcGuard<B>> for Arc<T> {
     fn from(value: ArcGuard<B>) -> Self {
-        let mut guard = ManuallyDrop::new(value);
+        let guard = ManuallyDrop::new(value);
         Self {
-            inner: Box::into_non_null(unsafe { ManuallyDrop::take(&mut guard.0) }).cast(),
+            inner: guard.0.cast(),
             _phantom: PhantomData,
         }
     }

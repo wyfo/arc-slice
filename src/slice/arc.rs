@@ -7,17 +7,18 @@ use core::{
 };
 
 #[allow(unused_imports)]
-use crate::msrv::{ConstPtrExt, OptionExt};
+use crate::msrv::{BoolExt, ConstPtrExt, OptionExt};
 use crate::{
     arc::Arc,
     buffer::Buffer,
-    layout::SimpleLayout,
+    layout::ArcLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
+    slice_mut::{ArcSliceMutLayout, Data},
     utils::{static_slice, try_transmute},
 };
 
-impl<const ANY_BUFFER: bool, const STATIC: bool> SimpleLayout<ANY_BUFFER, STATIC> {
+impl<const ANY_BUFFER: bool, const STATIC: bool> ArcLayout<ANY_BUFFER, STATIC> {
     fn arc<T>(data: &<Self as ArcSliceLayout>::Data) -> Option<ManuallyDrop<Arc<T, ANY_BUFFER>>> {
         match data {
             Some(ptr) => Some(ManuallyDrop::new(unsafe { Arc::from_raw(*ptr) })),
@@ -27,15 +28,13 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> SimpleLayout<ANY_BUFFER, STATIC
     }
 }
 
-impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
-    for SimpleLayout<ANY_BUFFER, STATIC>
-{
+impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<ANY_BUFFER, STATIC> {
     type Data = Option<NonNull<()>>;
 
     const STATIC_DATA: Option<Self::Data> = if STATIC { Some(None) } else { None };
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::new(None);
 
-    fn data_from_arc<T>(arc: Arc<T>) -> Self::Data {
+    fn data_from_arc<T, const ANY_BUFFER2: bool>(arc: Arc<T, ANY_BUFFER2>) -> Self::Data {
         Some(arc.into_raw())
     }
 
@@ -67,7 +66,7 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
     }
 
     fn is_unique<T>(data: &Self::Data) -> bool {
-        Self::arc::<T>(data).is_some_and(|arc| arc.is_unique())
+        Self::arc::<T>(data).is_some_and(|arc| arc.is_buffer_unique())
     }
 
     fn get_metadata<T, M: Any>(data: &Self::Data) -> Option<&M> {
@@ -88,15 +87,29 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         }
     }
 
+    unsafe fn mut_data<T: Send + Sync + 'static, L: ArcSliceMutLayout>(
+        start: NonNull<T>,
+        length: usize,
+        data: &mut ManuallyDrop<Self::Data>,
+    ) -> Option<(usize, Option<Data<true>>)> {
+        match Self::arc::<T>(data) {
+            Some(mut arc) => {
+                arc.is_unique().then_some(())?;
+                let capacity = unsafe { arc.capacity(start)? };
+                let data = Some(ManuallyDrop::into_inner(arc).into());
+                Some((capacity, data))
+            }
+            None => (length == 0).then_some((0, None)),
+        }
+    }
+
     unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceLayout>(
         start: NonNull<T>,
         length: usize,
         data: Self::Data,
     ) -> L::Data {
         match Self::arc::<T>(&data) {
-            Some(arc) => L::data_from_arc::<T>(unsafe {
-                Arc::from_raw(ManuallyDrop::into_inner(arc).into_raw())
-            }),
+            Some(arc) => L::data_from_arc(ManuallyDrop::into_inner(arc)),
             None => L::data_from_static(unsafe { static_slice(start, length) }),
         }
     }

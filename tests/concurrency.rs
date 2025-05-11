@@ -1,16 +1,16 @@
 use std::{sync::Arc, thread};
 
-use arc_slice::ArcBytes;
+use arc_slice::{layout::BoxedSliceLayout, ArcBytes};
 
 #[test]
 fn arc_slice_vec_concurrent_clone() {
-    let bytes = Arc::new(<ArcBytes>::new(vec![42]));
+    let bytes = Arc::new(ArcBytes::<BoxedSliceLayout>::from(vec![42]));
     let bytes2 = Arc::clone(&bytes);
     let thread = thread::spawn(move || {
-        assert!(bytes2.metadata::<()>().is_some());
+        assert!(bytes2.metadata::<()>().is_none());
         (*bytes2).clone()
     });
-    assert!(bytes.metadata::<()>().is_some());
+    assert!(bytes.metadata::<()>().is_none());
     let clone1 = (*bytes).clone();
     let clone2 = thread.join().unwrap();
     drop(clone1);

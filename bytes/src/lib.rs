@@ -101,7 +101,7 @@ impl<L: arc_slice::layout::Layout> Buf for arc_slice::ArcBytes<L> {
     }
 }
 
-impl Buf for arc_slice::ArcBytesMut {
+impl<L: arc_slice::layout::LayoutMut> Buf for arc_slice::ArcBytesMut<L> {
     fn remaining(&self) -> usize {
         self.len()
     }
@@ -115,7 +115,7 @@ impl Buf for arc_slice::ArcBytesMut {
     }
 }
 
-unsafe impl BufMut for arc_slice::ArcBytesMut {
+unsafe impl<L: arc_slice::layout::LayoutMut> BufMut for arc_slice::ArcBytesMut<L> {
     fn remaining_mut(&self) -> usize {
         self.capacity() - self.len()
     }

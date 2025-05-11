@@ -1,10 +1,10 @@
-use arc_slice::ArcStr;
+use arc_slice::{layout::ArcLayout, ArcStr};
 
 #[test]
-fn downcast_buffer() {
-    let bytes = <ArcStr>::new("plop".to_string());
-    assert_eq!(bytes.downcast_buffer::<String>().unwrap(), "plop");
+fn try_into_buffer() {
+    let bytes = ArcStr::<ArcLayout<true, true>>::from("plop".to_string());
+    assert_eq!(bytes.try_into_buffer::<String>().unwrap(), "plop");
 
-    let bytes = <ArcStr>::new_static("plop");
-    assert_eq!(bytes.downcast_buffer::<&'static str>().unwrap(), "plop");
+    let bytes = ArcStr::<ArcLayout<true, true>>::new_static("plop");
+    assert_eq!(bytes.try_into_buffer::<&'static str>().unwrap(), "plop");
 }

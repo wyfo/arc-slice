@@ -19,16 +19,18 @@ use crate::msrv::ConstPtrExt;
 use crate::msrv::{ptr, NonNullExt, StrictProvenance};
 use crate::{
     arc::Arc,
-    buffer::{BorrowMetadata, Buffer, BufferMut, BufferWithMetadata, DynBuffer},
-    layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, StaticLayout},
+    buffer::{BorrowMetadata, Buffer, BufferWithMetadata, DynBuffer},
+    layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, LayoutMut, StaticLayout},
     macros::is,
+    slice_mut::{ArcSliceMutLayout, Data},
     utils::{
         debug_slice, lower_hex, offset_len, offset_len_subslice, panic_out_of_range,
-        slice_into_raw_parts, upper_hex,
+        slice_into_raw_parts, upper_hex, NewChecked,
     },
+    ArcSliceMut,
 };
 
-mod simple;
+mod arc;
 // mod raw;
 mod vec;
 
@@ -37,11 +39,11 @@ pub trait ArcSliceLayout: 'static {
     const STATIC_DATA: Option<Self::Data> = None;
     // MSRV 1.83 const `Option::unwrap`
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::uninit();
-    fn data_from_arc<T>(arc: Arc<T>) -> Self::Data;
+    fn data_from_arc<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self::Data;
     fn data_from_static<T: Send + Sync + 'static>(slice: &'static [T]) -> Self::Data {
         if let Some(data) = Self::STATIC_DATA {
             data
-        } else if slice.len() == 0 {
+        } else if slice.is_empty() {
             // it doesn't matter if the start pointer doesn't correspond anymore,
             // as the slice is empty
             Self::data_from_arc(Arc::<T>::new_array([]).0)
@@ -82,7 +84,12 @@ pub trait ArcSliceLayout: 'static {
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
     ) -> Option<B>;
-    // TODO unsafe because we must unsure `L: FromLayout<Self>`
+    unsafe fn mut_data<T: Send + Sync + 'static, L: ArcSliceMutLayout>(
+        start: NonNull<T>,
+        length: usize,
+        data: &mut ManuallyDrop<Self::Data>,
+    ) -> Option<(usize, Option<Data<true>>)>;
+    // unsafe because we must unsure `L: FromLayout<Self>`
     unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceLayout>(
         start: NonNull<T>,
         length: usize,
@@ -112,7 +119,11 @@ unsafe impl<T: Send + Sync + 'static, L: Layout> Send for ArcSlice<T, L> {}
 unsafe impl<T: Send + Sync + 'static, L: Layout> Sync for ArcSlice<T, L> {}
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
-    const fn new_impl(start: NonNull<T>, length: usize, data: <L as ArcSliceLayout>::Data) -> Self {
+    pub(crate) const fn new_impl(
+        start: NonNull<T>,
+        length: usize,
+        data: <L as ArcSliceLayout>::Data,
+    ) -> Self {
         Self {
             start,
             length,
@@ -269,10 +280,19 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
         clone
     }
 
-    // #[inline]
-    // pub fn try_into_mut(self) -> Result<ArcSliceMut<T>, Self> {
-    //     todo!()
-    // }
+    #[inline]
+    pub fn try_into_mut<L2: LayoutMut + FromLayout<L>>(self) -> Result<ArcSliceMut<T, L2>, Self> {
+        let mut this = ManuallyDrop::new(self);
+        match unsafe { L::mut_data::<T, L2>(this.start, this.length, &mut this.data) } {
+            Some((capacity, data)) => Ok(ArcSliceMut::new_impl(
+                this.start,
+                this.length,
+                capacity,
+                data,
+            )),
+            None => Err(ManuallyDrop::into_inner(this)),
+        }
+    }
 
     #[inline]
     pub fn is_unique(&self) -> bool {
@@ -378,12 +398,12 @@ impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
         }
     }
 
-    pub(crate) fn from_vec(vec: Vec<T>) -> Self {
+    pub(crate) fn from_vec(mut vec: Vec<T>) -> Self {
         if vec.capacity() == 0 {
             return Self::new_array([]);
         }
-        let (start, length) = slice_into_raw_parts(&vec);
-        Self::new_impl(start, length, L::data_from_vec(vec))
+        let start = NonNull::new_checked(vec.as_mut_ptr());
+        Self::new_impl(start, vec.len(), L::data_from_vec(vec))
     }
 }
 
@@ -536,15 +556,21 @@ where
     }
 }
 
+impl<'a, T: Copy + Send + Sync + 'static, L: Layout> From<&'a [T]> for ArcSlice<T, L> {
+    fn from(value: &'a [T]) -> Self {
+        Self::new(value)
+    }
+}
+
 impl<T: Send + Sync + 'static, L: AnyBufferLayout> From<Box<[T]>> for ArcSlice<T, L> {
     fn from(value: Box<[T]>) -> Self {
-        value.into_arc_slice()
+        Self::from_vec(value.into_vec())
     }
 }
 
 impl<T: Send + Sync + 'static, L: AnyBufferLayout> From<Vec<T>> for ArcSlice<T, L> {
     fn from(value: Vec<T>) -> Self {
-        value.into_arc_slice()
+        Self::from_vec(value)
     }
 }
 

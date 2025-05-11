@@ -16,10 +16,8 @@ use crate::{
     macros::is,
     msrv::{ptr, NonZero, SubPtrExt},
     slice::ArcSliceLayout,
-    utils::{
-        static_slice, transmute_checked, try_transmute, unreachable_checked, NewChecked,
-        UnwrapChecked,
-    },
+    slice_mut::ArcSliceMutLayout,
+    utils::{static_slice, transmute_checked, try_transmute, NewChecked},
 };
 
 const CAPACITY_FLAG: usize = 1;
@@ -27,8 +25,8 @@ const CAPACITY_SHIFT: usize = 1;
 
 enum Data<T> {
     Static,
-    Capacity(NonZero<usize>),
     Arc(ManuallyDrop<Arc<T>>),
+    Capacity(NonZero<usize>),
 }
 
 impl<T> Data<T> {
@@ -60,7 +58,7 @@ impl DataPtr {
         Self(AtomicPtr::new(Self::capacity_as_ptr(capacity)))
     }
 
-    fn new_arc<T>(arc: Arc<T>) -> Self {
+    fn new_arc<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self {
         Self(AtomicPtr::new(arc.into_raw().as_ptr()))
     }
 
@@ -162,16 +160,14 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> =
         MaybeUninit::new((DataPtr::new_static(), MaybeUninit::uninit()));
 
-    fn data_from_arc<T>(arc: Arc<T>) -> Self::Data {
+    fn data_from_arc<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self::Data {
         (DataPtr::new_arc(arc), MaybeUninit::uninit())
     }
 
     fn data_from_vec<T: Send + Sync + 'static>(mut vec: Vec<T>) -> Self::Data {
         if let Some(base) = L::get_base(&mut vec) {
-            (
-                DataPtr::new_capacity(ManuallyDrop::new(vec).capacity()),
-                MaybeUninit::new(base),
-            )
+            let capacity = ManuallyDrop::new(vec).capacity();
+            (DataPtr::new_capacity(capacity), MaybeUninit::new(base))
         } else {
             (DataPtr::new_arc(Arc::new_vec(vec)), MaybeUninit::uninit())
         }
@@ -185,11 +181,11 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (ptr, base) = data;
         let new_ptr = match ptr.get::<T>() {
             Data::Static => DataPtr::new_static(),
+            Data::Arc(arc) => DataPtr::new_arc((*arc).clone()),
             Data::Capacity(capacity) => {
                 let vec = unsafe { Self::rebuild_vec(start, length, capacity, *base) };
                 data.0.promote_vec(vec)
             }
-            Data::Arc(arc) => DataPtr::new_arc((*arc).clone()),
         };
         (new_ptr, MaybeUninit::uninit())
     }
@@ -202,10 +198,10 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
             Data::Static => {}
+            Data::Arc(arc) => ManuallyDrop::into_inner(arc).drop::<UNIQUE_HINT>(),
             Data::Capacity(capacity) => {
                 drop(unsafe { Self::rebuild_vec(start, length, capacity, *base) });
             }
-            Data::Arc(arc) => ManuallyDrop::into_inner(arc).drop::<UNIQUE_HINT>(),
         }
     }
 
@@ -223,8 +219,8 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (ptr, _) = data;
         match ptr.get::<T>() {
             Data::Static => false,
-            Data::Capacity { .. } => true,
-            Data::Arc(arc) => arc.is_unique(),
+            Data::Arc(arc) => arc.is_buffer_unique(),
+            Data::Capacity(_) => true,
         }
     }
 
@@ -245,6 +241,10 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
             Data::Static => try_transmute(unsafe { static_slice(start, length) }).ok(),
+            Data::Arc(arc) => ManuallyDrop::into_inner(arc)
+                .take_buffer(start, length)
+                .map_err(mem::forget)
+                .ok(),
             Data::Capacity(capacity) if is!(B, Vec<T>) => {
                 let mut vec = unsafe { Self::rebuild_vec(start, length, capacity, *base) };
                 let offset = unsafe { start.as_ptr().sub_ptr(vec.as_mut_ptr()) };
@@ -256,10 +256,30 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
                 Some(transmute_checked(unsafe { Box::from_raw(slice) }))
             }
             Data::Capacity(_) => None,
-            Data::Arc(arc) => ManuallyDrop::into_inner(arc)
-                .take_buffer(start, length)
-                .map_err(mem::forget)
-                .ok(),
+        }
+    }
+
+    #[allow(unstable_name_collisions)]
+    unsafe fn mut_data<T: Send + Sync + 'static, L2: ArcSliceMutLayout>(
+        start: NonNull<T>,
+        length: usize,
+        data: &mut ManuallyDrop<Self::Data>,
+    ) -> Option<(usize, Option<crate::slice_mut::Data<true>>)> {
+        let (ptr, base) = &mut **data;
+        match ptr.get_mut::<T>() {
+            Data::Static => (length == 0).then_some((0, None)),
+            Data::Arc(mut arc) => {
+                arc.is_unique().then_some(())?;
+                let capacity = unsafe { arc.capacity(start)? };
+                let data = Some(ManuallyDrop::into_inner(arc).into());
+                Some((capacity, data))
+            }
+            Data::Capacity(capacity) => {
+                let mut vec = unsafe { Self::rebuild_vec(start, length, capacity, *base) };
+                let offset = unsafe { start.as_ptr().sub_ptr(vec.as_mut_ptr()) };
+                let data = Some(unsafe { L2::data_from_vec(vec, offset) });
+                Some((capacity.get() - offset, data))
+            }
         }
     }
 
@@ -271,10 +291,10 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (mut ptr, base) = data;
         match ptr.get_mut::<T>() {
             Data::Static => L2::data_from_static(unsafe { static_slice(start, length) }),
+            Data::Arc(arc) => L2::data_from_arc(ManuallyDrop::into_inner(arc)),
             Data::Capacity(capacity) => {
                 L2::data_from_vec(unsafe { Self::rebuild_vec(start, length, capacity, base) })
             }
-            Data::Arc(arc) => L2::data_from_arc(ManuallyDrop::into_inner(arc)),
         }
     }
 }

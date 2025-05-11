@@ -219,3 +219,14 @@ impl<T: Zeroable> NewChecked<T> for NonZero<T> {
 pub(crate) fn transmute_checked<T: Any, U: Any>(any: T) -> U {
     try_transmute(any).unwrap_checked()
 }
+
+// from `Vec` implementation
+pub(crate) const fn min_non_zero_cap<T>() -> usize {
+    if core::mem::size_of::<T>() == 1 {
+        8
+    } else if core::mem::size_of::<T>() <= 1024 {
+        4
+    } else {
+        1
+    }
+}

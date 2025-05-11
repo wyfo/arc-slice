@@ -13,6 +13,7 @@ fn readme_example() {
     assert_eq!(b, b"Hello ");
 }
 
+#[cfg(feature = "default-layout-mut-any-buffer")]
 #[test]
 fn readme_example_shm() {
     use arc_slice::{

@@ -1,8 +1,15 @@
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{
+    alloc::{handle_alloc_error, realloc},
+    boxed::Box,
+    string::String,
+    vec::Vec,
+};
 use core::{
+    alloc::{Layout, LayoutError},
     any::TypeId,
+    cmp::max,
     mem, ptr,
     ptr::{addr_of, addr_of_mut, NonNull},
 };
@@ -15,11 +22,12 @@ pub(crate) use crate::buffer::private::DynBuffer;
 use crate::msrv::SlicePtrExt;
 use crate::{
     error::TryReserveError,
-    layout::AnyBufferLayout,
+    layout::{AnyBufferLayout, LayoutMut},
     macros::{is, is_not},
+    slice_mut::TryReserveResult,
     str::ArcStr,
-    utils::NewChecked,
-    ArcSlice,
+    utils::{assert_checked, NewChecked},
+    ArcSlice, ArcSliceMut,
 };
 
 pub trait BorrowMetadata {
@@ -40,10 +48,13 @@ impl<B: BorrowMetadata> BorrowMetadata for Arc<B> {
 #[derive(Debug)]
 pub struct ArrayPtr<T>(pub(crate) *mut [T]);
 
-pub trait Buffer<T>: Sized + Send + Sync + 'static {
+pub trait Buffer<T>: Sized + Send + 'static {
     fn as_slice(&self) -> &[T];
 
-    fn is_unique(&self) -> bool;
+    #[inline]
+    fn is_unique(&self) -> bool {
+        true
+    }
 
     #[doc(hidden)]
     #[inline(always)]
@@ -90,11 +101,6 @@ impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for [T; N] {
         self
     }
 
-    #[inline]
-    fn is_unique(&self) -> bool {
-        true
-    }
-
     #[doc(hidden)]
     #[inline(always)]
     fn is_array(&self) -> bool {
@@ -122,11 +128,6 @@ impl<T: Send + Sync + 'static> Buffer<T> for Box<[T]> {
         self
     }
 
-    #[inline]
-    fn is_unique(&self) -> bool {
-        true
-    }
-
     #[inline(always)]
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
         ArcSlice::from_vec(self.into_vec())
@@ -137,11 +138,6 @@ impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
     #[inline]
     fn as_slice(&self) -> &[T] {
         self
-    }
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        true
     }
 
     #[inline(always)]
@@ -166,7 +162,7 @@ impl<T: Send + Sync + 'static> Buffer<T> for Arc<[T]> {
 }
 
 #[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl<T: Send + Sync + 'static, B: Buffer<T>> Buffer<T> for Arc<B> {
+impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> Buffer<T> for Arc<B> {
     #[inline]
     fn as_slice(&self) -> &[T] {
         self.as_ref().as_slice()
@@ -184,11 +180,13 @@ impl<T: Send + Sync + 'static, B: Buffer<T>> Buffer<T> for Arc<B> {
 /// - [`as_mut_ptr`] must point to the start of a memory buffer of [`capacity`],
 ///   with the first [`len`] element initialized.
 /// - slice delimited by [`as_mut_ptr`] and [`len`] must be the same as [`Buffer::as_slice`]
-/// - [`Buffer::is_unique`] must return `true`
+/// - retrieving [`capacity`] must not invalidate the buffer slice
+/// - if the type implement [`BorrowMetadata`], then [`borrow_metadata`] must not invalidate the buffer slice
 ///
 /// [`as_mut_ptr`]: Self::as_mut_ptr
 /// [`capacity`]: Self::capacity
 /// [`len`]: Self::len
+/// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
 #[allow(clippy::len_without_is_empty)]
 pub unsafe trait BufferMut<T>: Buffer<T> {
     fn as_mut_ptr(&mut self) -> NonNull<T>;
@@ -203,7 +201,16 @@ pub unsafe trait BufferMut<T>: Buffer<T> {
     /// - If `mem::needs_drop::<T>()`, then `len` must be greater or equal to [`Self::len`].
     unsafe fn set_len(&mut self, len: usize) -> bool;
 
-    fn reserve(&mut self, _additional: usize) -> bool;
+    fn reserve(&mut self, additional: usize) -> bool;
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn into_arc_slice_mut<L: AnyBufferLayout + LayoutMut>(self) -> ArcSliceMut<T, L>
+    where
+        T: Send + Sync + 'static,
+    {
+        ArcSliceMut::from_buffer_impl(BufferWithMetadata::new(self, ()))
+    }
 }
 
 unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
@@ -234,6 +241,12 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
         self.reserve(additional);
         true
     }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn into_arc_slice_mut<L: AnyBufferLayout + LayoutMut>(self) -> ArcSliceMut<T, L> {
+        ArcSliceMut::from_vec(self)
+    }
 }
 
 unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
@@ -261,27 +274,82 @@ unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
     fn reserve(&mut self, _additional: usize) -> bool {
         false
     }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn into_arc_slice_mut<L: AnyBufferLayout + LayoutMut>(self) -> ArcSliceMut<T, L> {
+        ArcSliceMut::new_array(self)
+    }
 }
 
+// pub(crate) trait BufferMutImpl<T> {
+//     fn as_mut_ptr(&mut self) -> NonNull<T>;
+//
+//     fn len(&self) -> usize;
+//
+//     fn capacity(&self) -> usize;
+//
+//     unsafe fn set_len(&mut self, len: usize) -> bool;
+//
+//     fn reserve(&mut self, additional: usize) -> bool;
+// }
+//
+// impl<T, B: BufferMut<T>> BufferMutImpl<T> for &mut B {
+//     fn as_mut_ptr(&mut self) -> NonNull<T> {
+//         B::as_mut_ptr(self)
+//     }
+//
+//     fn len(&self) -> usize {
+//         B::len(self)
+//     }
+//
+//     fn capacity(&self) -> usize {
+//         B::capacity(self)
+//     }
+//
+//     unsafe fn set_len(&mut self, len: usize) -> bool {
+//         unsafe { B::set_len(self, len) }
+//     }
+//
+//     fn reserve(&mut self, additional: usize) -> bool {
+//         B::reserve(self, additional)
+//     }
+// }
+
 pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
+    unsafe fn realloc(
+        &mut self,
+        additional: usize,
+        ptr: NonNull<u8>,
+        layout: impl Fn(usize) -> Result<Layout, LayoutError>,
+    ) -> (NonNull<u8>, usize) {
+        let required = self
+            .len()
+            .checked_add(additional)
+            .unwrap_or_else(|| panic!("capacity overflow"));
+        let new_capacity = max(self.capacity() * 2, required);
+        let cur_layout = unsafe { layout(self.capacity()).unwrap_unchecked() };
+        let new_layout = layout(new_capacity).unwrap_or_else(|_| panic!("capacity overflow"));
+        let new_ptr = unsafe { realloc(ptr.as_ptr(), cur_layout, new_layout.size()) };
+        if new_ptr.is_null() {
+            handle_alloc_error(new_layout);
+        }
+        (NonNull::new_checked(new_ptr).cast(), new_capacity)
+    }
+
     unsafe fn shift_left(&mut self, offset: usize, length: usize) -> bool {
+        assert_checked(!mem::needs_drop::<T>());
         let prev_len = self.len();
+        if length == prev_len {
+            return true;
+        }
         if !unsafe { self.set_len(length) } {
             return false;
         }
         let buffer_ptr = self.as_mut_ptr().as_ptr();
-        if mem::needs_drop::<T>() {
-            unsafe {
-                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(buffer_ptr, offset));
-                if prev_len > offset + length {
-                    ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
-                        buffer_ptr.add(offset + length),
-                        prev_len - offset - length,
-                    ));
-                }
-            }
-        }
-        if offset >= length {
+        if offset == 0 {
+            return true;
+        } else if offset >= length {
             unsafe { ptr::copy_nonoverlapping(buffer_ptr.add(offset), buffer_ptr, length) };
         } else {
             unsafe { ptr::copy(buffer_ptr.add(offset), buffer_ptr, length) };
@@ -289,35 +357,35 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
         true
     }
 
-    unsafe fn try_reclaim(&mut self, offset: usize, length: usize, additional: usize) -> bool {
-        self.capacity() - length >= additional
-            && offset >= length
-            && unsafe { self.shift_left(offset, length) }
-    }
-
-    unsafe fn try_reclaim_or_reserve(
+    unsafe fn try_reserve_impl(
         &mut self,
         offset: usize,
         length: usize,
         additional: usize,
         allocate: bool,
-    ) -> Result<usize, TryReserveError> {
+    ) -> TryReserveResult<T> {
         let capacity = self.capacity();
         if capacity - offset - length >= additional {
-            return Ok(offset);
+            return (Ok(capacity - offset), unsafe {
+                self.as_mut_ptr().add(offset)
+            });
         }
-        // conditions from `BytesMut::reserve_inner`
-        if self.capacity() - length >= additional
+        if !mem::needs_drop::<T>()
+            // conditions from `BytesMut::reserve_inner`
+            && self.capacity() - length >= additional
             && offset >= length
             && unsafe { self.shift_left(offset, length) }
         {
-            return Ok(0);
+            return (Ok(capacity), self.as_mut_ptr());
         }
-        if allocate && unsafe { self.shift_left(0, offset + length) } && self.reserve(additional) {
-            Ok(offset)
-        } else {
-            Err(TryReserveError::Unsupported)
+        if allocate && unsafe { self.set_len(offset + length) } && self.reserve(additional) {
+            return (Ok(self.capacity() - offset), unsafe {
+                self.as_mut_ptr().add(offset)
+            });
         }
+        (Err(TryReserveError::Unsupported), unsafe {
+            self.as_mut_ptr().add(offset)
+        })
     }
 }
 
@@ -326,7 +394,10 @@ impl<T, B: BufferMut<T>> BufferMutExt<T> for B {}
 pub trait StringBuffer: Sized + Send + Sync + 'static {
     fn as_str(&self) -> &str;
 
-    fn is_unique(&self) -> bool;
+    #[inline]
+    fn is_unique(&self) -> bool {
+        true
+    }
 
     #[doc(hidden)]
     #[inline(always)]
@@ -359,11 +430,6 @@ impl StringBuffer for Box<str> {
         self
     }
 
-    #[inline]
-    fn is_unique(&self) -> bool {
-        true
-    }
-
     #[doc(hidden)]
     #[inline(always)]
     fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
@@ -375,11 +441,6 @@ impl StringBuffer for String {
     #[inline]
     fn as_str(&self) -> &str {
         self
-    }
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        true
     }
 
     #[doc(hidden)]
@@ -464,7 +525,7 @@ pub unsafe trait RawBuffer<T>: Buffer<T> + Clone {
 
 #[cfg(feature = "raw-buffer")]
 #[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-unsafe impl<T: Send + Sync + 'static, B: Buffer<T>> RawBuffer<T> for Arc<B> {
+unsafe impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> RawBuffer<T> for Arc<B> {
     #[inline]
     fn into_raw(self) -> *const () {
         Arc::into_raw(self).cast()
@@ -506,7 +567,7 @@ unsafe impl<B: BorrowMetadata + 'static> DynBuffer for B {
     }
 
     fn get_metadata(&self, type_id: TypeId) -> Option<NonNull<()>> {
-        is!({ type_id }, B).then(|| NonNull::from(self.borrow_metadata()).cast())
+        is!({ type_id }, B::Metadata).then(|| NonNull::from(self.borrow_metadata()).cast())
     }
 
     unsafe fn take_buffer(this: *mut Self, type_id: TypeId, buffer: NonNull<()>) -> bool {
@@ -603,7 +664,7 @@ unsafe impl<B: 'static, M: 'static> DynBuffer for BufferWithMetadata<B, M> {
     }
 }
 
-pub(crate) mod private {
+mod private {
     use core::{any::TypeId, ptr::NonNull};
 
     /// # Safety

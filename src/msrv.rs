@@ -228,6 +228,12 @@ impl From<NonZero<usize>> for NonZeroUsize {
     }
 }
 
+impl From<NonZeroUsize> for NonZero<usize> {
+    fn from(value: NonZeroUsize) -> Self {
+        NonZero::new_checked(value.get())
+    }
+}
+
 pub(crate) mod ptr {
     pub(crate) use core::ptr::*;
 
@@ -235,6 +241,7 @@ pub(crate) mod ptr {
         t as _
     }
 
+    #[cfg(feature = "inlined")]
     pub(crate) fn from_mut<T: ?Sized>(t: &mut T) -> *mut T {
         t as _
     }

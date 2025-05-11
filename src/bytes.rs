@@ -1,4 +1,7 @@
-use crate::{layout::Layout, ArcBytes, ArcBytesMut, ArcStr};
+use crate::{
+    layout::{Layout, LayoutMut},
+    ArcBytes, ArcBytesMut, ArcStr,
+};
 
 impl<L: Layout> bytes::Buf for ArcBytes<L> {
     fn remaining(&self) -> usize {
@@ -14,7 +17,7 @@ impl<L: Layout> bytes::Buf for ArcBytes<L> {
     }
 }
 
-impl bytes::Buf for ArcBytesMut {
+impl<L: LayoutMut, const UNIQUE: bool> bytes::Buf for ArcBytesMut<L, UNIQUE> {
     fn remaining(&self) -> usize {
         self.len()
     }
@@ -28,7 +31,7 @@ impl bytes::Buf for ArcBytesMut {
     }
 }
 
-unsafe impl bytes::BufMut for ArcBytesMut {
+unsafe impl<L: LayoutMut, const UNIQUE: bool> bytes::BufMut for ArcBytesMut<L, UNIQUE> {
     fn remaining_mut(&self) -> usize {
         self.capacity() - self.len()
     }

@@ -7,13 +7,19 @@ use core::{
     ptr,
 };
 
-use arc_slice::{ArcBytes, ArcBytesMut};
+use arc_slice::{layout::DefaultLayoutMut, ArcBytesMut, ArcSliceMut};
 
 use crate::{buf::UninitSlice, Buf, BufMut, Bytes, TryGetError};
 
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
 #[repr(transparent)]
-pub struct BytesMut(ArcBytesMut);
+pub struct BytesMut(ArcBytesMut<DefaultLayoutMut, false>);
+
+impl Default for BytesMut {
+    fn default() -> Self {
+        Self(ArcBytesMut::default().into_shared())
+    }
+}
 
 impl BytesMut {
     #[cfg(feature = "serde")]
@@ -22,7 +28,7 @@ impl BytesMut {
     }
 
     pub fn with_capacity(capacity: usize) -> BytesMut {
-        Self(Vec::with_capacity(capacity).into())
+        Self(ArcBytesMut::with_capacity(capacity).into_shared())
     }
 
     pub fn new() -> BytesMut {
@@ -46,7 +52,7 @@ impl BytesMut {
     }
 
     pub fn zeroed(len: usize) -> BytesMut {
-        Self(alloc::vec![0; len].into())
+        Self(ArcBytesMut::zeroed(len).into_shared())
     }
 
     #[must_use = "consider BytesMut::truncate if you don't need the other half"]
@@ -116,7 +122,14 @@ impl BytesMut {
 
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
         if self.0.try_extend_from_slice(extend).is_err() {
-            *self = BytesMut([self.as_ref(), extend].concat().into())
+            #[cold]
+            fn realloc(bytes: &mut BytesMut, extend: &[u8]) {
+                let mut new_bytes = BytesMut::with_capacity(bytes.len() + extend.len());
+                unsafe { new_bytes.0.try_extend_from_slice(&bytes).unwrap_unchecked() };
+                unsafe { new_bytes.0.try_extend_from_slice(extend).unwrap_unchecked() };
+                *bytes = new_bytes;
+            }
+            realloc(self, extend)
         }
     }
 
@@ -127,7 +140,7 @@ impl BytesMut {
         }
         if let Err(other) = self.0.try_unsplit(other.0) {
             #[cold]
-            fn realloc(bytes: &mut BytesMut, other: ArcBytesMut) {
+            fn realloc(bytes: &mut BytesMut, other: ArcBytesMut<DefaultLayoutMut, false>) {
                 bytes.extend_from_slice(&other);
             }
             realloc(self, other);
@@ -251,7 +264,7 @@ impl DerefMut for BytesMut {
 
 impl<'a> From<&'a [u8]> for BytesMut {
     fn from(src: &'a [u8]) -> BytesMut {
-        BytesMut(src.to_vec().into())
+        Self(ArcBytesMut::<DefaultLayoutMut>::from(src).into_shared())
     }
 }
 
@@ -358,7 +371,9 @@ impl Extend<Bytes> for BytesMut {
 
 impl FromIterator<u8> for BytesMut {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> BytesMut {
-        BytesMut(Vec::from_iter(into_iter).into())
+        let mut bytes = ArcSliceMut::new();
+        bytes.extend(into_iter);
+        Self(bytes.into_shared())
     }
 }
 
@@ -520,7 +535,10 @@ impl PartialEq<Bytes> for BytesMut {
 
 impl From<BytesMut> for Vec<u8> {
     fn from(bytes: BytesMut) -> Self {
-        bytes.0.into_vec()
+        bytes
+            .0
+            .try_into_buffer::<Vec<u8>>()
+            .unwrap_or_else(|bytes| bytes.as_slice().to_vec())
     }
 }
 
@@ -542,27 +560,27 @@ impl fmt::UpperHex for BytesMut {
     }
 }
 
-impl From<BytesMut> for ArcBytesMut {
-    fn from(value: BytesMut) -> ArcBytesMut {
+impl From<BytesMut> for ArcBytesMut<DefaultLayoutMut, false> {
+    fn from(value: BytesMut) -> ArcBytesMut<DefaultLayoutMut, false> {
         value.0
     }
 }
 
-impl<'a> From<&'a BytesMut> for &'a ArcBytesMut {
-    fn from(value: &'a BytesMut) -> &'a ArcBytesMut {
+impl<'a> From<&'a BytesMut> for &'a ArcBytesMut<DefaultLayoutMut, false> {
+    fn from(value: &'a BytesMut) -> &'a ArcBytesMut<DefaultLayoutMut, false> {
         &value.0
     }
 }
 
-impl<'a> From<&'a mut BytesMut> for &'a mut ArcBytesMut {
-    fn from(value: &'a mut BytesMut) -> &'a mut ArcBytesMut {
+impl<'a> From<&'a mut BytesMut> for &'a mut ArcBytesMut<DefaultLayoutMut, false> {
+    fn from(value: &'a mut BytesMut) -> &'a mut ArcBytesMut<DefaultLayoutMut, false> {
         &mut value.0
     }
 }
 
-impl From<ArcBytesMut> for BytesMut {
-    fn from(value: ArcBytesMut) -> BytesMut {
-        BytesMut(value)
+impl<const UNIQUE: bool> From<ArcBytesMut<DefaultLayoutMut, UNIQUE>> for BytesMut {
+    fn from(value: ArcBytesMut<DefaultLayoutMut, UNIQUE>) -> BytesMut {
+        BytesMut(value.into_shared())
     }
 }
 
@@ -570,6 +588,6 @@ impl From<Bytes> for BytesMut {
     fn from(bytes: Bytes) -> BytesMut {
         bytes
             .try_into_mut()
-            .unwrap_or_else(|bytes| ArcBytesMut::from(ArcBytes::from(bytes).into_vec()).into())
+            .unwrap_or_else(|bytes| BytesMut::from(&*bytes))
     }
 }

@@ -4,7 +4,7 @@ use core::{cmp, fmt, marker::PhantomData};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    layout::Layout,
+    layout::{AnyBufferLayout, Layout, LayoutMut},
     macros::is,
     utils::{try_transmute, try_transmute_slice, UnwrapChecked},
     ArcSlice, ArcSliceMut, ArcStr,
@@ -32,7 +32,9 @@ impl<T: Serialize + Send + Sync + 'static, L: Layout> Serialize for ArcSlice<T, 
     }
 }
 
-impl<T: Serialize + Send + Sync + 'static> Serialize for ArcSliceMut<T> {
+impl<T: Serialize + Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> Serialize
+    for ArcSliceMut<T, L, UNIQUE>
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -52,8 +54,11 @@ impl<L: Layout> Serialize for ArcStr<L> {
 
 struct ArcSliceVisitor<T, S>(PhantomData<(T, S)>);
 
-impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From<Vec<T>>>
-    de::Visitor<'de> for ArcSliceVisitor<T, S>
+impl<
+        'de,
+        T: Deserialize<'de> + Copy + Send + Sync + 'static,
+        S: for<'a> From<&'a [T]> + From<Vec<T>>,
+    > de::Visitor<'de> for ArcSliceVisitor<T, S>
 {
     type Value = S;
 
@@ -66,8 +71,7 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From
         E: de::Error,
     {
         match try_transmute_slice(v) {
-            Some([]) => Ok(S::default()),
-            Some(s) => Ok(s.to_vec().into()),
+            Some(s) => Ok(s.into()),
             None => Err(de::Error::invalid_type(de::Unexpected::Bytes(v), &self)),
         }
     }
@@ -78,7 +82,7 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From
     {
         match try_transmute::<_, Vec<T>>(v) {
             Ok(v) => Ok(v.into()),
-            Err(_) => Err(de::Error::invalid_type(de::Unexpected::Bytes(v), &self)),
+            Err(v) => Err(de::Error::invalid_type(de::Unexpected::Bytes(&v), &self)),
         }
     }
 
@@ -100,8 +104,8 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From
 
 fn deserialize_arc_slice<'de, T, S, D>(deserializer: D) -> Result<S, D::Error>
 where
-    T: Deserialize<'de> + Clone + Send + Sync + 'static,
-    S: Default + From<Vec<T>>,
+    T: Deserialize<'de> + Copy + Send + Sync + 'static,
+    S: for<'a> From<&'a [T]> + From<Vec<T>>,
     D: Deserializer<'de>,
 {
     let visitor = ArcSliceVisitor(PhantomData);
@@ -112,7 +116,7 @@ where
     }
 }
 
-impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, L: Layout> Deserialize<'de>
+impl<'de, T: Deserialize<'de> + Copy + Send + Sync + 'static, L: AnyBufferLayout> Deserialize<'de>
     for ArcSlice<T, L>
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -123,7 +127,9 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, L: Layout> Deseri
     }
 }
 
-impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static> Deserialize<'de> for ArcSliceMut<T> {
+impl<'de, T: Deserialize<'de> + Copy + Send + Sync + 'static, L: LayoutMut + AnyBufferLayout>
+    Deserialize<'de> for ArcSliceMut<T, L>
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -134,7 +140,7 @@ impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static> Deserialize<'de> 
 
 struct ArcStrVisitor<L: Layout>(PhantomData<L>);
 
-impl<L: Layout> de::Visitor<'_> for ArcStrVisitor<L> {
+impl<L: AnyBufferLayout> de::Visitor<'_> for ArcStrVisitor<L> {
     type Value = ArcStr<L>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -156,7 +162,7 @@ impl<L: Layout> de::Visitor<'_> for ArcStrVisitor<L> {
     }
 }
 
-impl<'de, L: Layout> Deserialize<'de> for ArcStr<L> {
+impl<'de, L: AnyBufferLayout> Deserialize<'de> for ArcStr<L> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -188,7 +194,7 @@ const _: () = {
 
     struct SmallArcBytesVisitor<L>(PhantomData<L>);
 
-    impl<L: Layout> de::Visitor<'_> for SmallArcBytesVisitor<L> {
+    impl<L: AnyBufferLayout> de::Visitor<'_> for SmallArcBytesVisitor<L> {
         type Value = SmallArcBytes<L>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -199,7 +205,7 @@ const _: () = {
         where
             E: de::Error,
         {
-            Ok(SmallArcBytes::from_slice(v))
+            Ok(SmallArcBytes::new(v))
         }
 
         fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
@@ -210,7 +216,7 @@ const _: () = {
         }
     }
 
-    impl<'de, L: Layout> Deserialize<'de> for SmallArcBytes<L> {
+    impl<'de, L: AnyBufferLayout> Deserialize<'de> for SmallArcBytes<L> {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: Deserializer<'de>,
@@ -221,7 +227,7 @@ const _: () = {
 
     struct SmallArcStrVisitor<L>(PhantomData<L>);
 
-    impl<L: Layout> de::Visitor<'_> for SmallArcStrVisitor<L> {
+    impl<L: AnyBufferLayout> de::Visitor<'_> for SmallArcStrVisitor<L> {
         type Value = SmallArcStr<L>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -243,7 +249,7 @@ const _: () = {
         }
     }
 
-    impl<'de, L: Layout> Deserialize<'de> for SmallArcStr<L> {
+    impl<'de, L: AnyBufferLayout> Deserialize<'de> for SmallArcStr<L> {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: Deserializer<'de>,

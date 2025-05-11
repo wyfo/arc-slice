@@ -18,7 +18,7 @@ use crate::{
     buffer::{Buffer, StringBuffer},
     error::FromUtf8Error,
     layout::{
-        AnyBufferLayout, BoxedSliceLayout, DefaultLayout, Layout, RawLayout, SimpleLayout,
+        AnyBufferLayout, ArcLayout, BoxedSliceLayout, DefaultLayout, Layout, RawLayout,
         StaticLayout, VecLayout,
     },
     msrv::ptr,
@@ -38,9 +38,7 @@ pub trait InlinedLayout {
 const _3_WORDS_LEN: usize = 3 * size_of::<usize>() - 2;
 const _4_WORDS_LEN: usize = 4 * size_of::<usize>() - 2;
 
-impl<const ANY_BUFFER: bool, const STATIC: bool> InlinedLayout
-    for SimpleLayout<ANY_BUFFER, STATIC>
-{
+impl<const ANY_BUFFER: bool, const STATIC: bool> InlinedLayout for ArcLayout<ANY_BUFFER, STATIC> {
     const LEN: usize = _3_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _3_WORDS_LEN];
     const DEFAULT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];

@@ -9,9 +9,15 @@ use arc_slice::{buffer::Buffer, ArcBytes};
 
 use crate::{Buf, BytesMut};
 
-#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
 #[repr(transparent)]
 pub struct Bytes(ArcBytes);
+
+impl Default for Bytes {
+    fn default() -> Bytes {
+        Self(ArcBytes::new(&[]))
+    }
+}
 
 struct Owner<T>(T);
 impl<T: AsRef<[u8]> + Send + 'static> Buffer<u8> for Owner<T> {
@@ -340,7 +346,10 @@ impl From<String> for Bytes {
 
 impl From<Bytes> for Vec<u8> {
     fn from(bytes: Bytes) -> Vec<u8> {
-        bytes.0.into_vec()
+        bytes
+            .0
+            .try_into_buffer::<Vec<u8>>()
+            .unwrap_or_else(|bytes| bytes.as_slice().to_vec())
     }
 }
 
