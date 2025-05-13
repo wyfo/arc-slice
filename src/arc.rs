@@ -125,13 +125,14 @@ impl<T> CompactVec<T> {
             arc: ManuallyDrop<Box<ArcInner<CompactVec<T>>>>,
             length: usize,
         }
-        unsafe impl<T: Send> Send for ArcCompactVec<T> {}
-        impl<T: Send + 'static> Buffer<T> for ArcCompactVec<T> {
+        unsafe impl<T: Send + Sync> Send for ArcCompactVec<T> {}
+        unsafe impl<T: Send + Sync> Sync for ArcCompactVec<T> {}
+        impl<T: Send + Sync + 'static> Buffer<T> for ArcCompactVec<T> {
             fn as_slice(&self) -> &[T] {
                 unsafe { slice::from_raw_parts(self.arc.buffer.start.as_ptr(), self.length) }
             }
         }
-        unsafe impl<T: Send + 'static> BufferMut<T> for ArcCompactVec<T> {
+        unsafe impl<T: Send + Sync + 'static> BufferMut<T> for ArcCompactVec<T> {
             fn as_mut_ptr(&mut self) -> NonNull<T> {
                 self.arc.buffer.start
             }

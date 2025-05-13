@@ -30,14 +30,14 @@ use crate::{
     ArcSlice, ArcSliceMut,
 };
 
-pub trait BorrowMetadata {
+pub trait BorrowMetadata: Sync {
     type Metadata: Sync + 'static;
 
     fn borrow_metadata(&self) -> &Self::Metadata;
 }
 
 #[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl<B: BorrowMetadata> BorrowMetadata for Arc<B> {
+impl<B: BorrowMetadata + Send> BorrowMetadata for Arc<B> {
     type Metadata = B::Metadata;
     fn borrow_metadata(&self) -> &Self::Metadata {
         self.as_ref().borrow_metadata()
@@ -188,7 +188,7 @@ impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> Buffer<T> for Arc<B> {
 /// [`len`]: Self::len
 /// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
 #[allow(clippy::len_without_is_empty)]
-pub unsafe trait BufferMut<T>: Buffer<T> {
+pub unsafe trait BufferMut<T>: Buffer<T> + Sync {
     fn as_mut_ptr(&mut self) -> NonNull<T>;
 
     fn len(&self) -> usize;

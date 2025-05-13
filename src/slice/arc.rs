@@ -14,7 +14,8 @@ use crate::{
     layout::ArcLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
-    slice_mut::{ArcSliceMutLayout, Data},
+    slice_mut,
+    slice_mut::ArcSliceMutLayout,
     utils::{static_slice, try_transmute},
 };
 
@@ -91,7 +92,7 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<AN
         start: NonNull<T>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<Data<true>>)> {
+    ) -> Option<(usize, Option<slice_mut::Data<true>>)> {
         match Self::arc::<T>(data) {
             Some(mut arc) => {
                 arc.is_unique().then_some(())?;

@@ -16,6 +16,7 @@ use crate::{
     macros::is,
     msrv::{ptr, NonZero, SubPtrExt},
     slice::ArcSliceLayout,
+    slice_mut,
     slice_mut::ArcSliceMutLayout,
     utils::{static_slice, transmute_checked, try_transmute, NewChecked},
 };
@@ -264,7 +265,7 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         start: NonNull<T>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<crate::slice_mut::Data<true>>)> {
+    ) -> Option<(usize, Option<slice_mut::Data<true>>)> {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
             Data::Static => (length == 0).then_some((0, None)),
