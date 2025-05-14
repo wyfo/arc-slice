@@ -40,16 +40,8 @@ pub trait ArcSliceLayout: 'static {
     // MSRV 1.83 const `Option::unwrap`
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::uninit();
     fn data_from_arc<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self::Data;
-    fn data_from_static<T: Send + Sync + 'static>(slice: &'static [T]) -> Self::Data {
-        if let Some(data) = Self::STATIC_DATA {
-            data
-        } else if slice.is_empty() {
-            // it doesn't matter if the start pointer doesn't correspond anymore,
-            // as the slice is empty
-            Self::data_from_arc(Arc::<T>::new_array([]).0)
-        } else {
-            Self::data_from_arc(Arc::new_buffer(BufferWithMetadata::new(slice, ())).0)
-        }
+    fn data_from_static<T: Send + Sync + 'static>(_slice: &'static [T]) -> Self::Data {
+        Self::STATIC_DATA.unwrap()
     }
     fn data_from_vec<T: Send + Sync + 'static>(vec: Vec<T>) -> Self::Data;
     fn data_from_raw_buffer<T, B: DynBuffer + Buffer<T>>(_buffer: *const ()) -> Option<Self::Data> {
@@ -392,10 +384,7 @@ impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
 
     pub(crate) fn from_static(slice: &'static [T]) -> Self {
         let (start, length) = slice_into_raw_parts(slice);
-        match L::STATIC_DATA {
-            Some(data) => Self::new_impl(start, length, data),
-            None => Self::from_buffer_impl(BufferWithMetadata::new(slice, ())),
-        }
+        Self::new_impl(start, length, L::data_from_static(slice))
     }
 
     pub(crate) fn from_vec(mut vec: Vec<T>) -> Self {

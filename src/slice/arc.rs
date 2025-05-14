@@ -10,7 +10,7 @@ use core::{
 use crate::msrv::{BoolExt, ConstPtrExt, OptionExt};
 use crate::{
     arc::Arc,
-    buffer::Buffer,
+    buffer::{Buffer, BufferWithMetadata},
     layout::ArcLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
@@ -37,6 +37,14 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<AN
 
     fn data_from_arc<T, const ANY_BUFFER2: bool>(arc: Arc<T, ANY_BUFFER2>) -> Self::Data {
         Some(arc.into_raw())
+    }
+
+    fn data_from_static<T: Send + Sync + 'static>(slice: &'static [T]) -> Self::Data {
+        if let Some(data) = Self::STATIC_DATA {
+            return data;
+        }
+        assert!(ANY_BUFFER);
+        Self::data_from_arc(Arc::new_buffer(BufferWithMetadata::new(slice, ())).0)
     }
 
     fn data_from_vec<T: Send + Sync + 'static>(vec: Vec<T>) -> Self::Data {
