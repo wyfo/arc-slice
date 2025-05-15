@@ -35,9 +35,9 @@ mod arc;
 mod vec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Data<const UNIQUE: bool>(NonNull<()>);
+pub struct Data(NonNull<()>);
 
-impl<const UNIQUE: bool> Data<UNIQUE> {
+impl Data {
     fn addr(&self) -> NonZero<usize> {
         self.0.addr().into()
     }
@@ -47,13 +47,13 @@ impl<const UNIQUE: bool> Data<UNIQUE> {
     }
 }
 
-impl<const UNIQUE: bool> From<NonNull<()>> for Data<UNIQUE> {
+impl From<NonNull<()>> for Data {
     fn from(value: NonNull<()>) -> Self {
         Self(value)
     }
 }
 
-impl<T, const ANY_BUFFER: bool, const UNIQUE: bool> From<Arc<T, ANY_BUFFER>> for Data<UNIQUE> {
+impl<T, const ANY_BUFFER: bool> From<Arc<T, ANY_BUFFER>> for Data {
     fn from(value: Arc<T, ANY_BUFFER>) -> Self {
         Self(value.into_raw())
     }
@@ -61,60 +61,58 @@ impl<T, const ANY_BUFFER: bool, const UNIQUE: bool> From<Arc<T, ANY_BUFFER>> for
 
 pub(crate) type TryReserveResult<T> = (Result<usize, TryReserveError>, NonNull<T>);
 
-pub trait ArcSliceMutLayout {
-    unsafe fn data_from_vec<T: Send + Sync + 'static, const UNIQUE: bool>(
-        vec: Vec<T>,
-        offset: usize,
-    ) -> Data<UNIQUE>;
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait ArcSliceMutLayout {
+    unsafe fn data_from_vec<T: Send + Sync + 'static>(vec: Vec<T>, offset: usize) -> Data;
     fn clone<T: Send + Sync + 'static>(
         start: NonNull<T>,
         length: usize,
         capacity: usize,
-        data: &mut Data<false>,
+        data: &mut Data,
     );
     unsafe fn drop<T: Send + Sync + 'static, const UNIQUE: bool>(
         start: NonNull<T>,
         length: usize,
         capacity: usize,
-        data: Data<UNIQUE>,
+        data: Data,
     );
-    fn advance<T, const UNIQUE: bool>(_data: Option<&mut Data<UNIQUE>>, _offset: usize) {}
-    fn truncate<T: Send + Sync + 'static, const UNIQUE: bool>(
+    fn advance<T>(_data: Option<&mut Data>, _offset: usize) {}
+    fn truncate<T: Send + Sync + 'static>(
         _start: NonNull<T>,
         _length: usize,
         _capacity: usize,
-        _data: &mut Data<UNIQUE>,
+        _data: &mut Data,
     ) {
     }
-    fn get_metadata<T, M: Any, const UNIQUE: bool>(data: &Data<UNIQUE>) -> Option<&M>;
-    unsafe fn take_buffer<T: Send + Sync + 'static, const UNIQUE: bool, B: BufferMut<T>>(
+    fn get_metadata<T, M: Any>(data: &Data) -> Option<&M>;
+    unsafe fn take_buffer<T: Send + Sync + 'static, B: BufferMut<T>, const UNIQUE: bool>(
         start: NonNull<T>,
         length: usize,
         capacity: usize,
-        data: Data<UNIQUE>,
+        data: Data,
     ) -> Option<B>;
-    fn is_unique<T, const UNIQUE: bool>(data: Data<UNIQUE>) -> bool;
+    fn is_unique<T>(data: Data) -> bool;
     fn try_reserve<T: Send + Sync + 'static, const UNIQUE: bool>(
         start: NonNull<T>,
         length: usize,
         capacity: usize,
-        data: &mut Data<UNIQUE>,
+        data: &mut Data,
         additional: usize,
         allocate: bool,
     ) -> TryReserveResult<T>;
-    fn frozen_data<T: Send + Sync + 'static, L: ArcSliceLayout, const UNIQUE: bool>(
+    fn frozen_data<T: Send + Sync + 'static, L: ArcSliceLayout>(
         start: NonNull<T>,
         length: usize,
         capacity: usize,
-        data: Data<UNIQUE>,
+        data: Data,
     ) -> L::Data;
     // unsafe because we must unsure `L: FromLayout<Self>`
-    unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceMutLayout, const UNIQUE: bool>(
+    unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceMutLayout>(
         _start: NonNull<T>,
         _length: usize,
         _capacity: usize,
-        data: Data<UNIQUE>,
-    ) -> Data<UNIQUE> {
+        data: Data,
+    ) -> Data {
         data
     }
 }
@@ -127,7 +125,7 @@ pub struct ArcSliceMut<
     start: NonNull<T>,
     length: usize,
     capacity: usize,
-    data: Option<Data<UNIQUE>>,
+    data: Option<Data>,
     _phantom: PhantomData<L>,
 }
 
@@ -199,7 +197,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<T, 
         allocate: bool,
     ) -> Result<(), TryReserveError> {
         let (capacity, start) = match &mut self.data {
-            Some(data) => L::try_reserve(
+            Some(data) => L::try_reserve::<T, UNIQUE>(
                 self.start,
                 self.length,
                 self.capacity,
@@ -246,7 +244,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<T, 
         if offset > self.length {
             panic_out_of_range();
         }
-        L::advance::<T, UNIQUE>(self.data.as_mut(), offset);
+        L::advance::<T>(self.data.as_mut(), offset);
         self.start = unsafe { self.start.add(offset) };
         self.length -= offset;
         self.capacity -= offset;
@@ -269,7 +267,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<T, 
 
     #[inline]
     pub fn metadata<M: Any>(&self) -> Option<&M> {
-        <L as ArcSliceMutLayout>::get_metadata::<T, M, UNIQUE>(self.data.as_ref()?)
+        <L as ArcSliceMutLayout>::get_metadata::<T, M>(self.data.as_ref()?)
     }
 
     #[inline]
@@ -280,7 +278,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<T, 
             None => return Err(self),
         };
         let this = ManuallyDrop::new(self);
-        let take_buffer = <L as ArcSliceMutLayout>::take_buffer;
+        let take_buffer = <L as ArcSliceMutLayout>::take_buffer::<T, B, UNIQUE>;
         unsafe { take_buffer(this.start, this.length, this.capacity, data) }
             .ok_or_else(|| ManuallyDrop::into_inner(this))
     }
@@ -290,7 +288,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<T, 
         if UNIQUE {
             return Ok(try_transmute(self).ok().unwrap());
         }
-        let is_unique = <L as ArcSliceMutLayout>::is_unique::<T, UNIQUE>;
+        let is_unique = <L as ArcSliceMutLayout>::is_unique::<T>;
         if !self.data.is_some_and(is_unique) {
             return Err(self);
         }
@@ -306,9 +304,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<T, 
     pub fn freeze<L2: Layout + FromLayout<L>>(self) -> ArcSlice<T, L2> {
         let this = ManuallyDrop::new(self);
         let data = match this.data {
-            Some(data) => {
-                L::frozen_data::<T, L2, UNIQUE>(this.start, this.length, this.capacity, data)
-            }
+            Some(data) => L::frozen_data::<T, L2>(this.start, this.length, this.capacity, data),
             None => L2::data_from_static(unsafe {
                 slice::from_raw_parts(this.start.as_ptr(), this.length)
             }),
@@ -319,7 +315,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<T, 
     #[inline]
     pub fn with_layout<L2: LayoutMut + FromLayout<L>>(self) -> ArcSliceMut<T, L2, UNIQUE> {
         let this = ManuallyDrop::new(self);
-        let update_layout = <L as ArcSliceMutLayout>::update_layout::<T, L2, UNIQUE>;
+        let update_layout = <L as ArcSliceMutLayout>::update_layout::<T, L2>;
         ArcSliceMut {
             start: this.start,
             length: this.length,
@@ -337,7 +333,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut> ArcSliceMut<T, L> {
         start: NonNull<T>,
         length: usize,
         capacity: usize,
-        data: Option<Data<true>>,
+        data: Option<Data>,
     ) -> Self {
         Self {
             start,
@@ -525,7 +521,8 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const UNIQUE: bool> Drop
     #[inline]
     fn drop(&mut self) {
         if let Some(data) = self.data {
-            unsafe { <L as ArcSliceMutLayout>::drop(self.start, self.length, self.capacity, data) };
+            let drop = <L as ArcSliceMutLayout>::drop::<T, UNIQUE>;
+            unsafe { drop(self.start, self.length, self.capacity, data) };
         }
     }
 }

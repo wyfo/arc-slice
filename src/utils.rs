@@ -6,8 +6,6 @@ use core::{
     ptr::NonNull,
 };
 
-#[allow(unused_imports)]
-use crate::msrv::ConstPtrExt;
 use crate::{
     macros::{is, is_not},
     msrv::{NonZero, Zeroable},

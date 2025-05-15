@@ -20,6 +20,7 @@ mod slice;
 mod slice_mut;
 mod str;
 mod utils;
+mod vtable;
 
 pub use crate::{
     slice::{ArcSlice, ArcSliceBorrow},

@@ -21,14 +21,15 @@ fn test_bounds() {
     is_send::<BytesMut>();
 }
 
+// NO COMPAT Bytes layout can be 3 words
 #[test]
 fn test_layout() {
     use std::mem;
 
-    assert_eq!(
-        mem::size_of::<Bytes>(),
-        mem::size_of::<usize>() * 3,
-        "Bytes size should be 4 words",
+    assert!(
+        mem::size_of::<Bytes>() == mem::size_of::<usize>() * 3
+            || mem::size_of::<Bytes>() == mem::size_of::<usize>() * 4,
+        "Bytes size should be 3-4 words",
     );
     assert_eq!(
         mem::size_of::<BytesMut>(),

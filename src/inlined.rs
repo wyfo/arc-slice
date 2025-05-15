@@ -29,7 +29,8 @@ use crate::{
 
 const INLINED_FLAG: u8 = 0x80;
 
-pub trait InlinedLayout {
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait InlinedLayout {
     const LEN: usize;
     type Data: Copy;
     const DEFAULT: Self::Data;
@@ -38,25 +39,27 @@ pub trait InlinedLayout {
 const _3_WORDS_LEN: usize = 3 * size_of::<usize>() - 2;
 const _4_WORDS_LEN: usize = 4 * size_of::<usize>() - 2;
 
-impl<const ANY_BUFFER: bool, const STATIC: bool> InlinedLayout for ArcLayout<ANY_BUFFER, STATIC> {
+unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> InlinedLayout
+    for ArcLayout<ANY_BUFFER, STATIC>
+{
     const LEN: usize = _3_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _3_WORDS_LEN];
     const DEFAULT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
 }
 
-impl InlinedLayout for BoxedSliceLayout {
+unsafe impl InlinedLayout for BoxedSliceLayout {
     const LEN: usize = _3_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _3_WORDS_LEN];
     const DEFAULT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
 }
 
-impl InlinedLayout for VecLayout {
+unsafe impl InlinedLayout for VecLayout {
     const LEN: usize = _4_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _4_WORDS_LEN];
     const DEFAULT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
 }
 
-impl<const BOXED_SLICE: bool> InlinedLayout for RawLayout<BOXED_SLICE> {
+unsafe impl InlinedLayout for RawLayout {
     const LEN: usize = _4_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _4_WORDS_LEN];
     const DEFAULT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
@@ -334,7 +337,7 @@ impl<L: StaticLayout> SmallArcBytes<L> {
 impl<L: AnyBufferLayout> SmallArcBytes<L> {
     #[inline]
     pub fn from_buffer<B: Buffer<u8>>(buffer: B) -> Self {
-        if buffer.is_array() {
+        if B::is_array() {
             if let Some(small) = SmallBytes::new(buffer.as_slice()) {
                 return small.into();
             }

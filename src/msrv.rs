@@ -156,6 +156,7 @@ impl<T> MutPtrExt<T> for *mut T {
 #[allow(dead_code)]
 pub(crate) trait NonNullExt<T>: Sized + Copy {
     unsafe fn add(self, count: usize) -> NonNull<T>;
+    unsafe fn sub(self, count: usize) -> NonNull<T>;
     unsafe fn read(self) -> T;
     unsafe fn write(self, val: T);
 }
@@ -163,6 +164,10 @@ pub(crate) trait NonNullExt<T>: Sized + Copy {
 impl<T> NonNullExt<T> for NonNull<T> {
     unsafe fn add(self, count: usize) -> NonNull<T> {
         unsafe { NonNull::new_checked(self.as_ptr().add(count)) }
+    }
+
+    unsafe fn sub(self, count: usize) -> NonNull<T> {
+        unsafe { NonNull::new_checked(self.as_ptr().sub(count)) }
     }
 
     unsafe fn read(self) -> T {

@@ -5,7 +5,10 @@ use core::{
     ops::{Deref, RangeBounds},
 };
 
-use arc_slice::{buffer::Buffer, ArcBytes};
+use arc_slice::{
+    buffer::{AsRefBuffer, Buffer},
+    ArcBytes,
+};
 
 use crate::{Buf, BytesMut};
 
@@ -16,17 +19,6 @@ pub struct Bytes(ArcBytes);
 impl Default for Bytes {
     fn default() -> Bytes {
         Self(ArcBytes::new(&[]))
-    }
-}
-
-struct Owner<T>(T);
-impl<T: AsRef<[u8]> + Send + 'static> Buffer<u8> for Owner<T> {
-    fn as_slice(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-
-    fn is_unique(&self) -> bool {
-        false
     }
 }
 
@@ -43,7 +35,7 @@ impl Bytes {
     where
         T: AsRef<[u8]> + Send + 'static,
     {
-        Self(ArcBytes::from_buffer(Owner(owner)))
+        Self(ArcBytes::from_buffer(AsRefBuffer::<_, false>(owner)))
     }
 
     pub const fn len(&self) -> usize {

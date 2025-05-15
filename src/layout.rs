@@ -26,11 +26,15 @@ impl StaticLayout for VecLayout {}
 impl AnyBufferLayout for VecLayout {}
 impl LayoutMut for VecLayout {}
 
+#[cfg(feature = "raw-buffer")]
 #[derive(Debug)]
-pub struct RawLayout<const BOXED_SLICE: bool = { cfg!(feature = "default-layout-boxed-slice") }>;
-// impl<const BOXED_SLICE: bool> Layout for RawLayout<BOXED_SLICE> {}
-// impl<const BOXED_SLICE: bool> StaticLayout for RawLayout<BOXED_SLICE> {}
-// impl<const BOXED_SLICE: bool> AnyBufferLayout for RawLayout<BOXED_SLICE> {}
+pub struct RawLayout;
+#[cfg(feature = "raw-buffer")]
+impl Layout for RawLayout {}
+#[cfg(feature = "raw-buffer")]
+impl StaticLayout for RawLayout {}
+#[cfg(feature = "raw-buffer")]
+impl AnyBufferLayout for RawLayout {}
 
 pub trait FromLayout<L: Layout>: Layout {}
 
@@ -39,8 +43,7 @@ impl<L1: AnyBufferLayout, L2: AnyBufferLayout> FromLayout<L1> for L2 {}
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "default-layout-raw")] {
-        // TODO
-        pub type DefaultLayout = ArcLayout;
+        pub type DefaultLayout = RawLayout;
     } else if #[cfg(feature = "default-layout-vec")] {
         pub type DefaultLayout = VecLayout;
     } else if #[cfg(feature = "default-layout-boxed-slice")] {

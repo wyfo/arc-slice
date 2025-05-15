@@ -153,7 +153,7 @@ impl BoxedSliceOrVecLayout for VecLayout {
     }
 }
 
-impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
+unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
     type Data = (DataPtr, MaybeUninit<L::Base>);
     #[allow(clippy::declare_interior_mutable_const)]
     const STATIC_DATA: Option<Self::Data> = Some((DataPtr::new_static(), MaybeUninit::uninit()));
@@ -199,7 +199,7 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
             Data::Static => {}
-            Data::Arc(arc) => ManuallyDrop::into_inner(arc).drop::<UNIQUE_HINT>(),
+            Data::Arc(arc) => ManuallyDrop::into_inner(arc).drop_with_unique_hint::<UNIQUE_HINT>(),
             Data::Capacity(capacity) => {
                 drop(unsafe { Self::rebuild_vec(start, length, capacity, *base) });
             }
@@ -242,10 +242,11 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
             Data::Static => try_transmute(unsafe { static_slice(start, length) }).ok(),
-            Data::Arc(arc) => ManuallyDrop::into_inner(arc)
-                .take_buffer(start, length)
-                .map_err(mem::forget)
-                .ok(),
+            Data::Arc(arc) => {
+                unsafe { ManuallyDrop::into_inner(arc).take_buffer::<B, false>(start, length) }
+                    .map_err(mem::forget)
+                    .ok()
+            }
             Data::Capacity(capacity) if is!(B, Vec<T>) => {
                 let mut vec = unsafe { Self::rebuild_vec(start, length, capacity, *base) };
                 let offset = unsafe { start.as_ptr().sub_ptr(vec.as_mut_ptr()) };
@@ -265,16 +266,14 @@ impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         start: NonNull<T>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<slice_mut::Data<true>>)> {
+    ) -> Option<(usize, Option<slice_mut::Data>)> {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<T>() {
             Data::Static => (length == 0).then_some((0, None)),
-            Data::Arc(mut arc) => {
-                arc.is_unique().then_some(())?;
-                let capacity = unsafe { arc.capacity(start)? };
-                let data = Some(ManuallyDrop::into_inner(arc).into());
-                Some((capacity, data))
-            }
+            Data::Arc(mut arc) => Some((
+                unsafe { arc.capacity(start)? },
+                Some(ManuallyDrop::into_inner(arc).into()),
+            )),
             Data::Capacity(capacity) => {
                 let mut vec = unsafe { Self::rebuild_vec(start, length, capacity, *base) };
                 let offset = unsafe { start.as_ptr().sub_ptr(vec.as_mut_ptr()) };

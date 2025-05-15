@@ -29,7 +29,9 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcLayout<ANY_BUFFER, STATIC> {
     }
 }
 
-impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<ANY_BUFFER, STATIC> {
+unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
+    for ArcLayout<ANY_BUFFER, STATIC>
+{
     type Data = Option<NonNull<()>>;
 
     const STATIC_DATA: Option<Self::Data> = if STATIC { Some(None) } else { None };
@@ -52,7 +54,7 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<AN
     }
 
     fn clone<T>(_start: NonNull<T>, _length: usize, data: &Self::Data) -> Self::Data {
-        Self::arc::<T>(data).map(|arc| (*arc).clone().into_raw())
+        Some((*Self::arc::<T>(data)?).clone().into_raw())
     }
 
     unsafe fn drop<T, const UNIQUE_HINT: bool>(
@@ -61,7 +63,7 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<AN
         data: &mut ManuallyDrop<Self::Data>,
     ) {
         if let Some(arc) = Self::arc::<T>(data) {
-            ManuallyDrop::into_inner(arc).drop::<UNIQUE_HINT>();
+            ManuallyDrop::into_inner(arc).drop_with_unique_hint::<UNIQUE_HINT>();
         }
     }
 
@@ -88,10 +90,11 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<AN
         data: &mut ManuallyDrop<Self::Data>,
     ) -> Option<B> {
         match Self::arc::<T>(data) {
-            Some(arc) => ManuallyDrop::into_inner(arc)
-                .take_buffer(start, length)
-                .map_err(mem::forget)
-                .ok(),
+            Some(arc) => {
+                unsafe { ManuallyDrop::into_inner(arc).take_buffer::<B, false>(start, length) }
+                    .map_err(mem::forget)
+                    .ok()
+            }
             None => try_transmute(unsafe { static_slice(start, length) }).ok(),
         }
     }
@@ -100,14 +103,12 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout for ArcLayout<AN
         start: NonNull<T>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<slice_mut::Data<true>>)> {
+    ) -> Option<(usize, Option<slice_mut::Data>)> {
         match Self::arc::<T>(data) {
-            Some(mut arc) => {
-                arc.is_unique().then_some(())?;
-                let capacity = unsafe { arc.capacity(start)? };
-                let data = Some(ManuallyDrop::into_inner(arc).into());
-                Some((capacity, data))
-            }
+            Some(mut arc) => Some((
+                unsafe { arc.capacity(start)? },
+                Some(ManuallyDrop::into_inner(arc).into()),
+            )),
             None => (length == 0).then_some((0, None)),
         }
     }

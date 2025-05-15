@@ -31,20 +31,33 @@ use crate::{
 };
 
 mod arc;
-// mod raw;
+#[cfg(feature = "raw-buffer")]
+mod raw;
 mod vec;
 
-pub trait ArcSliceLayout: 'static {
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait ArcSliceLayout: 'static {
     type Data;
     const STATIC_DATA: Option<Self::Data> = None;
     // MSRV 1.83 const `Option::unwrap`
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::uninit();
     fn data_from_arc<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self::Data;
+    fn data_from_arc_slice<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self::Data {
+        Self::data_from_arc(arc)
+    }
+    fn data_from_arc_buffer<T, const ANY_BUFFER: bool, B: DynBuffer + Buffer<T>>(
+        arc: Arc<T, ANY_BUFFER>,
+    ) -> Self::Data {
+        Self::data_from_arc(arc)
+    }
     fn data_from_static<T: Send + Sync + 'static>(_slice: &'static [T]) -> Self::Data {
         Self::STATIC_DATA.unwrap()
     }
     fn data_from_vec<T: Send + Sync + 'static>(vec: Vec<T>) -> Self::Data;
-    fn data_from_raw_buffer<T, B: DynBuffer + Buffer<T>>(_buffer: *const ()) -> Option<Self::Data> {
+    #[cfg(feature = "raw-buffer")]
+    fn data_from_raw_buffer<T, B: DynBuffer + RawBuffer<T>>(
+        _buffer: *const (),
+    ) -> Option<Self::Data> {
         None
     }
     fn clone<T: Send + Sync + 'static>(
@@ -80,7 +93,7 @@ pub trait ArcSliceLayout: 'static {
         start: NonNull<T>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<Data<true>>)>;
+    ) -> Option<(usize, Option<Data>)>;
     // unsafe because we must unsure `L: FromLayout<Self>`
     unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceLayout>(
         start: NonNull<T>,
@@ -133,7 +146,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             return empty;
         }
         let (arc, start) = Arc::<T>::new(slice);
-        Self::new_impl(start, slice.len(), L::data_from_arc(arc))
+        Self::new_impl(start, slice.len(), L::data_from_arc_slice(arc))
     }
 
     pub(crate) fn new_array<const N: usize>(array: [T; N]) -> Self {
@@ -141,7 +154,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<T, L> {
             return empty;
         }
         let (arc, start) = Arc::<T>::new_array(array);
-        Self::new_impl(start, N, L::data_from_arc(arc))
+        Self::new_impl(start, N, L::data_from_arc_slice(arc))
     }
 
     fn new_empty(start: NonNull<T>, length: usize) -> Option<Self> {
@@ -333,7 +346,7 @@ impl<T: Send + Sync + 'static, L: StaticLayout> ArcSlice<T, L> {
 impl<T: Send + Sync + 'static, L: AnyBufferLayout> ArcSlice<T, L> {
     pub(crate) fn from_buffer_impl<B: DynBuffer + Buffer<T>>(buffer: B) -> Self {
         let (arc, start, length) = Arc::new_buffer(buffer);
-        Self::new_impl(start, length, L::data_from_arc(arc))
+        Self::new_impl(start, length, L::data_from_arc_buffer::<T, true, B>(arc))
     }
 
     #[cfg(feature = "raw-buffer")]

@@ -28,6 +28,7 @@ use shared_memory::{Shmem, ShmemConf};
 
 struct MyShmBuffer(Shmem);
 unsafe impl Send for MyShmBuffer {}
+unsafe impl Sync for MyShmBuffer {}
 impl Buffer<u8> for MyShmBuffer {
     fn as_slice(&self) -> &[u8] {
         unsafe { self.0.as_slice() }

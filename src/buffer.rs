@@ -1,5 +1,3 @@
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
 use alloc::{
     alloc::{handle_alloc_error, realloc},
     boxed::Box,
@@ -8,22 +6,19 @@ use alloc::{
 };
 use core::{
     alloc::{Layout, LayoutError},
-    any::TypeId,
+    any::Any,
     cmp::max,
+    marker::PhantomData,
     mem, ptr,
     ptr::{addr_of, addr_of_mut, NonNull},
 };
 
-#[cfg(feature = "portable-atomic-util")]
-use portable_atomic_util::Arc;
-
 pub(crate) use crate::buffer::private::DynBuffer;
 #[allow(unused_imports)]
-use crate::msrv::SlicePtrExt;
+use crate::msrv::{NonNullExt, SlicePtrExt};
 use crate::{
     error::TryReserveError,
     layout::{AnyBufferLayout, LayoutMut},
-    macros::{is, is_not},
     slice_mut::TryReserveResult,
     str::ArcStr,
     utils::{assert_checked, NewChecked},
@@ -34,14 +29,6 @@ pub trait BorrowMetadata: Sync {
     type Metadata: Sync + 'static;
 
     fn borrow_metadata(&self) -> &Self::Metadata;
-}
-
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl<B: BorrowMetadata + Send> BorrowMetadata for Arc<B> {
-    type Metadata = B::Metadata;
-    fn borrow_metadata(&self) -> &Self::Metadata {
-        self.as_ref().borrow_metadata()
-    }
 }
 
 #[doc(hidden)]
@@ -58,7 +45,7 @@ pub trait Buffer<T>: Sized + Send + 'static {
 
     #[doc(hidden)]
     #[inline(always)]
-    fn is_array(&self) -> bool {
+    fn is_array() -> bool {
         false
     }
 
@@ -103,7 +90,7 @@ impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for [T; N] {
 
     #[doc(hidden)]
     #[inline(always)]
-    fn is_array(&self) -> bool {
+    fn is_array() -> bool {
         true
     }
 
@@ -143,35 +130,6 @@ impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
     #[inline(always)]
     fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
         ArcSlice::from_vec(self)
-    }
-}
-
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl<T: Send + Sync + 'static> Buffer<T> for Arc<[T]> {
-    #[inline]
-    fn as_slice(&self) -> &[T] {
-        self
-    }
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        // Arc doesn't expose an API to check uniqueness with shared reference
-        // See `Arc::is_unique`, it cannot be done by simply checking strong/weak counts
-        false
-    }
-}
-
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> Buffer<T> for Arc<B> {
-    #[inline]
-    fn as_slice(&self) -> &[T] {
-        self.as_ref().as_slice()
-    }
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        // See impl Buffer<T> for Arc<[T]>
-        false
     }
 }
 
@@ -391,7 +349,7 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
 
 impl<T, B: BufferMut<T>> BufferMutExt<T> for B {}
 
-pub trait StringBuffer: Sized + Send + Sync + 'static {
+pub trait StringBuffer: Sized + Send + 'static {
     fn as_str(&self) -> &str;
 
     #[inline]
@@ -450,66 +408,6 @@ impl StringBuffer for String {
     }
 }
 
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl StringBuffer for Arc<str> {
-    #[inline]
-    fn as_str(&self) -> &str {
-        self
-    }
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        // See impl Buffer<T> for Arc<[T]>
-        false
-    }
-}
-
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-impl<B: StringBuffer + Send + Sync> StringBuffer for Arc<B> {
-    #[inline]
-    fn as_str(&self) -> &str {
-        self.as_ref().as_str()
-    }
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        // See impl Buffer<T> for Arc<[T]>
-        false
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct StringBufferWrapper<B>(pub(crate) B);
-
-impl<B: StringBuffer> Buffer<u8> for StringBufferWrapper<B> {
-    fn as_slice(&self) -> &[u8] {
-        self.0.as_str().as_bytes()
-    }
-
-    fn is_unique(&self) -> bool {
-        self.0.is_unique()
-    }
-}
-
-#[cfg(feature = "raw-buffer")]
-unsafe impl<B: RawStringBuffer> RawBuffer<u8> for StringBufferWrapper<B> {
-    fn into_raw(self) -> *const () {
-        self.0.into_raw()
-    }
-
-    unsafe fn from_raw(ptr: *const ()) -> Self {
-        Self(unsafe { B::from_raw(ptr) })
-    }
-}
-
-impl<B: BorrowMetadata> BorrowMetadata for StringBufferWrapper<B> {
-    type Metadata = B::Metadata;
-
-    fn borrow_metadata(&self) -> &Self::Metadata {
-        self.0.borrow_metadata()
-    }
-}
-
 #[cfg(feature = "raw-buffer")]
 /// # Safety
 ///
@@ -521,20 +419,6 @@ pub unsafe trait RawBuffer<T>: Buffer<T> + Clone {
     /// # Safety
     /// The pointer must be obtained by a call to [`RawBuffer::into_raw`].
     unsafe fn from_raw(ptr: *const ()) -> Self;
-}
-
-#[cfg(feature = "raw-buffer")]
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-unsafe impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> RawBuffer<T> for Arc<B> {
-    #[inline]
-    fn into_raw(self) -> *const () {
-        Arc::into_raw(self).cast()
-    }
-
-    #[inline]
-    unsafe fn from_raw(ptr: *const ()) -> Self {
-        unsafe { Arc::from_raw(ptr.cast()) }
-    }
 }
 
 /// # Safety
@@ -549,33 +433,16 @@ pub unsafe trait RawStringBuffer: StringBuffer + Clone {
     unsafe fn from_raw(ptr: *const ()) -> Self;
 }
 
-#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
-unsafe impl<B: StringBuffer + Send + Sync> RawStringBuffer for Arc<B> {
-    #[inline]
-    fn into_raw(self) -> *const () {
-        Arc::into_raw(self).cast()
-    }
-    #[inline]
-    unsafe fn from_raw(ptr: *const ()) -> Self {
-        unsafe { Arc::from_raw(ptr.cast()) }
-    }
-}
+unsafe impl<B: BorrowMetadata + Any> DynBuffer for B {
+    type Buffer = B;
+    type Metadata = B::Metadata;
 
-unsafe impl<B: BorrowMetadata + 'static> DynBuffer for B {
-    fn has_metadata() -> bool {
-        is_not!(B::Metadata, ())
+    fn get_metadata(&self) -> &Self::Metadata {
+        self.borrow_metadata()
     }
 
-    fn get_metadata(&self, type_id: TypeId) -> Option<NonNull<()>> {
-        is!({ type_id }, B::Metadata).then(|| NonNull::from(self.borrow_metadata()).cast())
-    }
-
-    unsafe fn take_buffer(this: *mut Self, type_id: TypeId, buffer: NonNull<()>) -> bool {
-        if is!({ type_id }, B) {
-            unsafe { ptr::copy_nonoverlapping(this, buffer.as_ptr().cast(), 1) }
-            return true;
-        }
-        false
+    unsafe fn take_buffer(this: *mut Self, buffer: NonNull<()>) {
+        unsafe { ptr::copy_nonoverlapping(this, buffer.as_ptr().cast(), 1) }
     }
 }
 
@@ -588,12 +455,6 @@ pub(crate) struct BufferWithMetadata<B, M> {
 impl<B, M> BufferWithMetadata<B, M> {
     pub(crate) fn new(buffer: B, metadata: M) -> Self {
         Self { buffer, metadata }
-    }
-}
-
-impl<B> From<B> for BufferWithMetadata<B, ()> {
-    fn from(value: B) -> Self {
-        Self::new(value, ())
     }
 }
 
@@ -645,34 +506,267 @@ unsafe impl<T, B: RawBuffer<T>> RawBuffer<T> for BufferWithMetadata<B, ()> {
     }
 }
 
-unsafe impl<B: 'static, M: 'static> DynBuffer for BufferWithMetadata<B, M> {
-    fn has_metadata() -> bool {
-        is_not!(M, ())
+unsafe impl<B: Any, M: Any> DynBuffer for BufferWithMetadata<B, M> {
+    type Buffer = B;
+    type Metadata = M;
+
+    fn get_metadata(&self) -> &Self::Metadata {
+        &self.metadata
     }
 
-    fn get_metadata(&self, type_id: TypeId) -> Option<NonNull<()>> {
-        is!({ type_id }, M).then(|| NonNull::from(&self.metadata).cast())
-    }
-
-    unsafe fn take_buffer(this: *mut Self, type_id: TypeId, buffer: NonNull<()>) -> bool {
-        if is!({ type_id }, B) {
-            unsafe { ptr::copy_nonoverlapping(addr_of!((*this).buffer), buffer.as_ptr().cast(), 1) }
-            unsafe { ptr::drop_in_place(addr_of_mut!((*this).metadata)) }
-            return true;
-        }
-        false
+    unsafe fn take_buffer(this: *mut Self, buffer: NonNull<()>) {
+        unsafe { ptr::copy_nonoverlapping(addr_of!((*this).buffer), buffer.as_ptr().cast(), 1) }
+        unsafe { ptr::drop_in_place(addr_of_mut!((*this).metadata)) }
     }
 }
 
-mod private {
-    use core::{any::TypeId, ptr::NonNull};
+#[derive(Clone)]
+pub(crate) struct StringBufferWrapper<B>(pub(crate) B);
 
-    /// # Safety
-    ///
-    /// TODO
+impl<B: StringBuffer> Buffer<u8> for StringBufferWrapper<B> {
+    fn as_slice(&self) -> &[u8] {
+        self.0.as_str().as_bytes()
+    }
+
+    fn is_unique(&self) -> bool {
+        self.0.is_unique()
+    }
+}
+
+#[cfg(feature = "raw-buffer")]
+unsafe impl<B: RawStringBuffer> RawBuffer<u8> for StringBufferWrapper<B> {
+    fn into_raw(self) -> *const () {
+        self.0.into_raw()
+    }
+
+    unsafe fn from_raw(ptr: *const ()) -> Self {
+        Self(unsafe { B::from_raw(ptr) })
+    }
+}
+
+impl<B: BorrowMetadata> BorrowMetadata for StringBufferWrapper<B> {
+    type Metadata = B::Metadata;
+
+    fn borrow_metadata(&self) -> &Self::Metadata {
+        self.0.borrow_metadata()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AsRefBuffer<B, const UNIQUE: bool = true>(pub B);
+
+impl<T: Send + Sync + 'static, B: AsRef<[T]> + Send + 'static, const UNIQUE: bool> Buffer<T>
+    for AsRefBuffer<B, UNIQUE>
+{
+    fn as_slice(&self) -> &[T] {
+        self.0.as_ref()
+    }
+
+    fn is_unique(&self) -> bool {
+        UNIQUE
+    }
+}
+
+impl<B: AsRef<str> + Send + 'static, const UNIQUE: bool> StringBuffer for AsRefBuffer<B, UNIQUE> {
+    fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+
+    fn is_unique(&self) -> bool {
+        UNIQUE
+    }
+}
+
+pub trait BufferImpl<B>: Send + 'static {
+    type Slice: ?Sized;
+    type Metadata: Sync + 'static;
+    fn buffer_slice(buffer: &B) -> &Self::Slice;
+    fn buffer_is_unique(_buffer: &B) -> bool {
+        false
+    }
+    fn borrow_metadata(buffer: &B) -> &Self::Metadata;
+}
+
+#[derive(Debug)]
+pub struct BufferWithImpl<B, D> {
+    pub buffer: B,
+    _phantom: PhantomData<D>,
+}
+
+impl<B: Clone, D> Clone for BufferWithImpl<B, D> {
+    fn clone(&self) -> Self {
+        Self::new(self.buffer.clone())
+    }
+}
+
+impl<B, D> BufferWithImpl<B, D> {
+    pub fn new(buffer: B) -> Self {
+        Self {
+            buffer,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<B: Sync, D: BufferImpl<B> + Sync> BorrowMetadata for BufferWithImpl<B, D> {
+    type Metadata = D::Metadata;
+    fn borrow_metadata(&self) -> &Self::Metadata {
+        D::borrow_metadata(&self.buffer)
+    }
+}
+
+impl<T: Send + Sync + 'static, B: Send + 'static, D: BufferImpl<B, Slice = [T]>> Buffer<T>
+    for BufferWithImpl<B, D>
+{
+    fn as_slice(&self) -> &D::Slice {
+        D::buffer_slice(&self.buffer)
+    }
+
+    fn is_unique(&self) -> bool {
+        D::buffer_is_unique(&self.buffer)
+    }
+}
+
+impl<B: Send + 'static, D: BufferImpl<B, Slice = str>> StringBuffer for BufferWithImpl<B, D> {
+    fn as_str(&self) -> &D::Slice {
+        D::buffer_slice(&self.buffer)
+    }
+
+    fn is_unique(&self) -> bool {
+        D::buffer_is_unique(&self.buffer)
+    }
+}
+
+#[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
+const _: () = {
+    #[cfg(not(feature = "portable-atomic"))]
+    use alloc::sync::Arc;
+
+    #[cfg(feature = "portable-atomic-util")]
+    use portable_atomic_util::Arc;
+
+    impl<B: BorrowMetadata + Send> BorrowMetadata for Arc<B> {
+        type Metadata = B::Metadata;
+        fn borrow_metadata(&self) -> &Self::Metadata {
+            self.as_ref().borrow_metadata()
+        }
+    }
+
+    impl<T: Send + Sync + 'static> Buffer<T> for Arc<[T]> {
+        #[inline]
+        fn as_slice(&self) -> &[T] {
+            self
+        }
+
+        #[inline]
+        fn is_unique(&self) -> bool {
+            // Arc doesn't expose an API to check uniqueness with shared reference
+            // See `Arc::is_unique`, it cannot be done by simply checking strong/weak counts
+            false
+        }
+    }
+
+    impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> Buffer<T> for Arc<B> {
+        #[inline]
+        fn as_slice(&self) -> &[T] {
+            self.as_ref().as_slice()
+        }
+
+        #[inline]
+        fn is_unique(&self) -> bool {
+            // See impl Buffer<T> for Arc<[T]>
+            false
+        }
+    }
+
+    impl StringBuffer for Arc<str> {
+        #[inline]
+        fn as_str(&self) -> &str {
+            self
+        }
+
+        #[inline]
+        fn is_unique(&self) -> bool {
+            // See impl Buffer<T> for Arc<[T]>
+            false
+        }
+    }
+
+    impl<B: StringBuffer + Send + Sync> StringBuffer for Arc<B> {
+        #[inline]
+        fn as_str(&self) -> &str {
+            self.as_ref().as_str()
+        }
+
+        #[inline]
+        fn is_unique(&self) -> bool {
+            // See impl Buffer<T> for Arc<[T]>
+            false
+        }
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    unsafe impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> RawBuffer<T> for Arc<B> {
+        #[inline]
+        fn into_raw(self) -> *const () {
+            Arc::into_raw(self).cast()
+        }
+
+        #[inline]
+        unsafe fn from_raw(ptr: *const ()) -> Self {
+            unsafe { Arc::from_raw(ptr.cast()) }
+        }
+    }
+
+    unsafe impl<B: StringBuffer + Send + Sync> RawStringBuffer for Arc<B> {
+        #[inline]
+        fn into_raw(self) -> *const () {
+            Arc::into_raw(self).cast()
+        }
+        #[inline]
+        unsafe fn from_raw(ptr: *const ()) -> Self {
+            unsafe { Arc::from_raw(ptr.cast()) }
+        }
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    unsafe impl<
+            T: Send + Sync + 'static,
+            B: Send + Sync + 'static,
+            D: BufferImpl<Arc<B>, Slice = [T]>,
+        > RawBuffer<T> for BufferWithImpl<Arc<B>, D>
+    {
+        fn into_raw(self) -> *const () {
+            Arc::into_raw(self.buffer).cast()
+        }
+
+        unsafe fn from_raw(ptr: *const ()) -> Self {
+            Self::new(unsafe { Arc::from_raw(ptr.cast()) })
+        }
+    }
+
+    #[cfg(feature = "raw-buffer")]
+    unsafe impl<B: Send + Sync + 'static, D: BufferImpl<Arc<B>, Slice = str>> RawStringBuffer
+        for BufferWithImpl<Arc<B>, D>
+    {
+        fn into_raw(self) -> *const () {
+            Arc::into_raw(self.buffer).cast()
+        }
+
+        unsafe fn from_raw(ptr: *const ()) -> Self {
+            Self::new(unsafe { Arc::from_raw(ptr.cast()) })
+        }
+    }
+};
+
+mod private {
+    use core::{any::Any, ptr::NonNull};
+
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe trait DynBuffer {
-        fn has_metadata() -> bool;
-        fn get_metadata(&self, type_id: TypeId) -> Option<NonNull<()>>;
-        unsafe fn take_buffer(this: *mut Self, type_id: TypeId, buffer: NonNull<()>) -> bool;
+        type Buffer: Any;
+        type Metadata: Any;
+        fn get_metadata(&self) -> &Self::Metadata;
+        unsafe fn take_buffer(this: *mut Self, buffer: NonNull<()>);
     }
 }
