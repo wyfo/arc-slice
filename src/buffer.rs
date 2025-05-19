@@ -8,66 +8,309 @@ use core::{
     alloc::{Layout, LayoutError},
     any::Any,
     cmp::max,
+    convert::Infallible,
     marker::PhantomData,
-    mem, ptr,
+    mem,
+    mem::ManuallyDrop,
+    ptr,
     ptr::{addr_of, addr_of_mut, NonNull},
+    slice,
 };
 
 pub(crate) use crate::buffer::private::DynBuffer;
 #[allow(unused_imports)]
-use crate::msrv::{NonNullExt, SlicePtrExt};
+use crate::msrv::{ConstPtrExt, NonNullExt, SlicePtrExt};
 use crate::{
     error::TryReserveError,
-    layout::{AnyBufferLayout, LayoutMut},
+    macros::assume,
     slice_mut::TryReserveResult,
-    str::ArcStr,
     utils::{assert_checked, NewChecked},
-    ArcSlice, ArcSliceMut,
+};
+#[cfg(feature = "serde")]
+use crate::{
+    macros::{is, is_not},
+    utils::try_transmute,
 };
 
-pub trait BorrowMetadata: Sync {
-    type Metadata: Sync + 'static;
+// default must be empty if implemented
+// `into_vec` must not have any side effect
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait Slice: Send + Sync + 'static {
+    type Item: Send + Sync + 'static;
+    type Vec: BufferMut<Self>;
 
-    fn borrow_metadata(&self) -> &Self::Metadata;
+    fn to_slice(&self) -> &[Self::Item];
+    unsafe fn to_slice_mut(&mut self) -> &mut [Self::Item];
+    fn into_boxed_slice(self: Box<Self>) -> Box<[Self::Item]>;
+    fn into_vec(vec: Self::Vec) -> Vec<Self::Item>;
+
+    unsafe fn from_slice_unchecked(slice: &[Self::Item]) -> &Self;
+    unsafe fn from_slice_mut_unchecked(slice: &mut [Self::Item]) -> &mut Self;
+    unsafe fn from_boxed_slice_unchecked(boxed: Box<[Self::Item]>) -> Box<Self>;
+    unsafe fn from_vec_unchecked(vec: Vec<Self::Item>) -> Self::Vec;
+
+    type TryFromSliceError;
+    fn try_from_slice(slice: &[Self::Item]) -> Result<&Self, Self::TryFromSliceError>;
 }
 
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct ArrayPtr<T>(pub(crate) *mut [T]);
+pub(crate) trait SliceExt: Slice {
+    fn as_ptr(&self) -> NonNull<Self::Item> {
+        NonNull::new_checked(self.to_slice().as_ptr().cast_mut())
+    }
+    fn as_mut_ptr(&mut self) -> NonNull<Self::Item> {
+        NonNull::new_checked(unsafe { self.to_slice_mut().as_mut_ptr() })
+    }
+    fn len(&self) -> usize {
+        self.to_slice().len()
+    }
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn to_raw_parts(&self) -> (NonNull<Self::Item>, usize) {
+        (self.as_ptr(), self.len())
+    }
+    fn to_raw_parts_mut(&mut self) -> (NonNull<Self::Item>, usize) {
+        (self.as_mut_ptr(), self.len())
+    }
+    unsafe fn from_raw_parts<'a>(start: NonNull<Self::Item>, length: usize) -> &'a Self {
+        unsafe { Self::from_slice_unchecked(slice::from_raw_parts(start.as_ptr(), length)) }
+    }
+    unsafe fn from_raw_parts_mut<'a>(start: NonNull<Self::Item>, length: usize) -> &'a mut Self {
+        unsafe { Self::from_slice_mut_unchecked(slice::from_raw_parts_mut(start.as_ptr(), length)) }
+    }
+    // use this instead of `BufferMutExt::as_mut_ptr` as the pointer
+    // is not invalidated when the vector is moved
+    fn vec_start(vec: &mut Self::Vec) -> NonNull<Self::Item> {
+        let mut vec = ManuallyDrop::new(Self::into_vec(unsafe { ptr::read(vec) }));
+        NonNull::new_checked(vec.as_mut_ptr())
+    }
+    fn needs_drop() -> bool {
+        mem::needs_drop::<Self::Item>()
+    }
+}
 
-pub trait Buffer<T>: Sized + Send + 'static {
-    fn as_slice(&self) -> &[T];
+impl<S: Slice + ?Sized> SliceExt for S {}
 
-    #[inline]
-    fn is_unique(&self) -> bool {
-        true
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait Subsliceable: Slice {
+    unsafe fn check_subslice(&self, start: usize, end: usize);
+    unsafe fn check_advance(&self, offset: usize) {
+        unsafe { self.check_subslice(offset, self.len()) }
+    }
+    unsafe fn check_truncate(&self, len: usize) {
+        unsafe { self.check_subslice(0, len) }
+    }
+    unsafe fn check_split(&self, at: usize) {
+        unsafe { self.check_subslice(0, at) };
+        unsafe { self.check_subslice(at, self.len()) };
+    }
+}
+
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait Concatenable: Slice {}
+
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait Extendable: Concatenable {}
+
+#[allow(clippy::missing_safety_doc)]
+#[cfg(feature = "serde")]
+pub unsafe trait Deserializable: Slice
+where
+    Self::Item: for<'a> serde::Deserialize<'a>,
+    Self::TryFromSliceError: core::fmt::Display,
+{
+    fn deserialize<'de, D: serde::Deserializer<'de>, V: serde::de::Visitor<'de>>(
+        deserializer: D,
+        visitor: V,
+    ) -> Result<V::Value, D::Error>;
+    fn expected() -> &'static str;
+    fn deserialize_from_bytes(bytes: &[u8]) -> Option<&Self>;
+    fn deserialize_from_byte_buf(bytes: Vec<u8>) -> Result<Self::Vec, Vec<u8>>;
+    fn deserialize_from_str(s: &str) -> Option<&Self>;
+    fn deserialize_from_string(s: String) -> Result<Self::Vec, String>;
+    fn try_deserialize_from_seq() -> bool;
+}
+
+unsafe impl<T: Send + Sync + 'static> Slice for [T] {
+    type Item = T;
+    type Vec = Vec<T>;
+
+    fn to_slice(&self) -> &[Self::Item] {
+        self
+    }
+    unsafe fn to_slice_mut(&mut self) -> &mut [Self::Item] {
+        self
+    }
+    fn into_boxed_slice(self: Box<Self>) -> Box<[Self::Item]> {
+        self
+    }
+    fn into_vec(vec: Self::Vec) -> Vec<Self::Item> {
+        vec
     }
 
-    #[doc(hidden)]
-    #[inline(always)]
-    fn is_array() -> bool {
-        false
+    unsafe fn from_slice_unchecked(slice: &[Self::Item]) -> &Self {
+        slice
+    }
+    unsafe fn from_slice_mut_unchecked(slice: &mut [Self::Item]) -> &mut Self {
+        slice
+    }
+    unsafe fn from_boxed_slice_unchecked(boxed: Box<[Self::Item]>) -> Box<Self> {
+        boxed
+    }
+    unsafe fn from_vec_unchecked(vec: Vec<Self::Item>) -> Self::Vec {
+        vec
     }
 
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L>
-    where
-        T: Send + Sync + 'static,
-    {
-        ArcSlice::from_buffer_impl(BufferWithMetadata::new(self, ()))
+    type TryFromSliceError = Infallible;
+    fn try_from_slice(slice: &[Self::Item]) -> Result<&Self, Self::TryFromSliceError> {
+        Ok(slice)
     }
+}
 
-    #[doc(hidden)]
-    #[inline(always)]
-    unsafe fn try_from_array(_array: ArrayPtr<T>) -> Option<Self> {
+unsafe impl<T: Send + Sync + 'static> Subsliceable for [T] {
+    unsafe fn check_subslice(&self, _start: usize, _end: usize) {}
+}
+
+unsafe impl<T: Send + Sync + 'static> Concatenable for [T] {}
+
+unsafe impl<T: Send + Sync + 'static> Extendable for [T] {}
+
+#[cfg(feature = "serde")]
+unsafe impl<T: for<'a> serde::Deserialize<'a> + Send + Sync + 'static> Deserializable for [T] {
+    fn deserialize<'de, D: serde::Deserializer<'de>, V: serde::de::Visitor<'de>>(
+        deserializer: D,
+        visitor: V,
+    ) -> Result<V::Value, D::Error> {
+        if is!(T, u8) {
+            deserializer.deserialize_byte_buf(visitor)
+        } else {
+            deserializer.deserialize_seq(visitor)
+        }
+    }
+    fn expected() -> &'static str {
+        if is!(T, u8) {
+            "a byte string"
+        } else {
+            "a sequence"
+        }
+    }
+    fn deserialize_from_bytes(bytes: &[u8]) -> Option<&Self> {
+        is!(T, u8).then(|| unsafe { bytes.align_to().1 })
+    }
+    fn deserialize_from_byte_buf(bytes: Vec<u8>) -> Result<Self::Vec, Vec<u8>> {
+        try_transmute(bytes)
+    }
+    fn deserialize_from_str(_s: &str) -> Option<&Self> {
         None
     }
+    fn deserialize_from_string(s: String) -> Result<Self::Vec, String> {
+        Err(s)
+    }
+    fn try_deserialize_from_seq() -> bool {
+        is_not!(T, u8)
+    }
 }
 
-impl<T: Send + Sync + 'static> Buffer<T> for &'static [T] {
+unsafe impl Slice for str {
+    type Item = u8;
+    type Vec = String;
+
+    fn to_slice(&self) -> &[Self::Item] {
+        self.as_bytes()
+    }
+    unsafe fn to_slice_mut(&mut self) -> &mut [Self::Item] {
+        unsafe { self.as_bytes_mut() }
+    }
+    fn into_boxed_slice(self: Box<Self>) -> Box<[Self::Item]> {
+        self.into_boxed_bytes()
+    }
+    fn into_vec(vec: Self::Vec) -> Vec<Self::Item> {
+        vec.into_bytes()
+    }
+
+    unsafe fn from_slice_unchecked(slice: &[Self::Item]) -> &Self {
+        unsafe { core::str::from_utf8_unchecked(slice) }
+    }
+    unsafe fn from_slice_mut_unchecked(slice: &mut [Self::Item]) -> &mut Self {
+        unsafe { core::str::from_utf8_unchecked_mut(slice) }
+    }
+    unsafe fn from_boxed_slice_unchecked(boxed: Box<[Self::Item]>) -> Box<Self> {
+        unsafe { alloc::str::from_boxed_utf8_unchecked(boxed) }
+    }
+    unsafe fn from_vec_unchecked(vec: Vec<Self::Item>) -> Self::Vec {
+        unsafe { String::from_utf8_unchecked(vec) }
+    }
+
+    type TryFromSliceError = core::str::Utf8Error;
+    fn try_from_slice(slice: &[Self::Item]) -> Result<&Self, Self::TryFromSliceError> {
+        core::str::from_utf8(slice)
+    }
+}
+
+pub(crate) fn check_char_boundary(s: &str, offset: usize) {
+    #[cold]
+    fn panic_not_a_char_boundary() -> ! {
+        panic!("not a char boundary")
+    }
+    unsafe { assume!(offset <= s.len()) };
+    if !s.is_char_boundary(offset) {
+        panic_not_a_char_boundary();
+    }
+}
+
+unsafe impl Subsliceable for str {
+    unsafe fn check_subslice(&self, start: usize, end: usize) {
+        check_char_boundary(self, start);
+        check_char_boundary(self, end);
+    }
+
+    unsafe fn check_split(&self, at: usize) {
+        check_char_boundary(self, at);
+    }
+}
+
+unsafe impl Concatenable for str {}
+
+#[cfg(feature = "serde")]
+unsafe impl Deserializable for str {
+    fn deserialize<'de, D: serde::Deserializer<'de>, V: serde::de::Visitor<'de>>(
+        deserializer: D,
+        visitor: V,
+    ) -> Result<V::Value, D::Error> {
+        deserializer.deserialize_string(visitor)
+    }
+    fn expected() -> &'static str {
+        "a byte string"
+    }
+    fn deserialize_from_bytes(bytes: &[u8]) -> Option<&Self> {
+        core::str::from_utf8(bytes).ok()
+    }
+    fn deserialize_from_byte_buf(bytes: Vec<u8>) -> Result<Self::Vec, Vec<u8>> {
+        String::from_utf8(bytes).map_err(|err| err.into_bytes())
+    }
+    fn deserialize_from_str(s: &str) -> Option<&Self> {
+        Some(s)
+    }
+    fn deserialize_from_string(s: String) -> Result<Self::Vec, String> {
+        Ok(s)
+    }
+    fn try_deserialize_from_seq() -> bool {
+        false
+    }
+}
+
+pub trait Buffer<S: ?Sized>: Sized + Send + 'static {
+    fn as_slice(&self) -> &S;
+
     #[inline]
-    fn as_slice(&self) -> &[T] {
+    fn is_unique(&self) -> bool {
+        true
+    }
+}
+
+impl<S: Slice + ?Sized> Buffer<S> for &'static S {
+    #[inline]
+    fn as_slice(&self) -> &S {
         self
     }
 
@@ -75,63 +318,40 @@ impl<T: Send + Sync + 'static> Buffer<T> for &'static [T] {
     fn is_unique(&self) -> bool {
         false
     }
+}
 
-    #[inline(always)]
-    fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
-        ArcSlice::from_static(self)
+impl<S: Slice + ?Sized> Buffer<S> for Box<S> {
+    #[inline]
+    fn as_slice(&self) -> &S {
+        self
     }
 }
 
-impl<T: Send + Sync + 'static, const N: usize> Buffer<T> for [T; N] {
+impl<T: Send + Sync + 'static> Buffer<[T]> for Vec<T> {
     #[inline]
     fn as_slice(&self) -> &[T] {
         self
     }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn is_array() -> bool {
-        true
-    }
-
-    #[doc(hidden)]
-    fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L>
-    where
-        T: Send + Sync + 'static,
-    {
-        ArcSlice::new_array(self)
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    unsafe fn try_from_array(array: ArrayPtr<T>) -> Option<Self> {
-        (array.0.len() == N).then(|| unsafe { ptr::read(array.0.cast()) })
-    }
 }
 
-impl<T: Send + Sync + 'static> Buffer<T> for Box<[T]> {
+impl Buffer<str> for String {
     #[inline]
-    fn as_slice(&self) -> &[T] {
+    fn as_slice(&self) -> &str {
         self
     }
+}
 
-    #[inline(always)]
-    fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
-        ArcSlice::from_vec(self.into_vec())
+pub(crate) trait BufferExt<S: Slice + ?Sized>: Buffer<S> {
+    fn as_ptr(&self) -> NonNull<S::Item> {
+        self.as_slice().to_raw_parts().0
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().to_raw_parts().1
     }
 }
 
-impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
-    #[inline]
-    fn as_slice(&self) -> &[T] {
-        self
-    }
-
-    #[inline(always)]
-    fn into_arc_slice<L: AnyBufferLayout>(self) -> ArcSlice<T, L> {
-        ArcSlice::from_vec(self)
-    }
-}
+impl<S: Slice + ?Sized, B: Buffer<S>> BufferExt<S> for B {}
 
 /// # Safety
 ///
@@ -146,40 +366,23 @@ impl<T: Send + Sync + 'static> Buffer<T> for Vec<T> {
 /// [`len`]: Self::len
 /// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
 #[allow(clippy::len_without_is_empty)]
-pub unsafe trait BufferMut<T>: Buffer<T> + Sync {
-    fn as_mut_ptr(&mut self) -> NonNull<T>;
-
-    fn len(&self) -> usize;
+pub unsafe trait BufferMut<S: ?Sized>: Buffer<S> + Sync {
+    fn as_slice_mut(&mut self) -> &mut S;
 
     fn capacity(&self) -> usize;
 
     /// # Safety
     ///
-    /// - First `len` items of buffer slice must be initialized.
-    /// - If `mem::needs_drop::<T>()`, then `len` must be greater or equal to [`Self::len`].
+    /// First `len` items of buffer slice must be initialized.
     unsafe fn set_len(&mut self, len: usize) -> bool;
 
     fn reserve(&mut self, additional: usize) -> bool;
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_slice_mut<L: AnyBufferLayout + LayoutMut>(self) -> ArcSliceMut<T, L>
-    where
-        T: Send + Sync + 'static,
-    {
-        ArcSliceMut::from_buffer_impl(BufferWithMetadata::new(self, ()))
-    }
 }
 
-unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
+unsafe impl<T: Send + Sync + 'static> BufferMut<[T]> for Vec<T> {
     #[inline]
-    fn as_mut_ptr(&mut self) -> NonNull<T> {
-        NonNull::new_checked(self.as_mut_ptr())
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.len()
+    fn as_slice_mut(&mut self) -> &mut [T] {
+        self
     }
 
     #[inline]
@@ -199,82 +402,38 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<T> for Vec<T> {
         self.reserve(additional);
         true
     }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_slice_mut<L: AnyBufferLayout + LayoutMut>(self) -> ArcSliceMut<T, L> {
-        ArcSliceMut::from_vec(self)
-    }
 }
 
-unsafe impl<T: Send + Sync + 'static, const N: usize> BufferMut<T> for [T; N] {
+unsafe impl BufferMut<str> for String {
     #[inline]
-    fn as_mut_ptr(&mut self) -> NonNull<T> {
-        NonNull::new_checked(self.as_mut_slice().as_mut_ptr())
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.as_slice().len()
+    fn as_slice_mut(&mut self) -> &mut str {
+        self
     }
 
     #[inline]
     fn capacity(&self) -> usize {
-        self.as_slice().len()
+        self.capacity()
     }
 
     #[inline]
-    unsafe fn set_len(&mut self, _len: usize) -> bool {
-        false
+    unsafe fn set_len(&mut self, len: usize) -> bool {
+        // SAFETY: same function contract
+        unsafe { self.as_mut_vec().set_len(len) };
+        true
     }
 
     #[inline]
-    fn reserve(&mut self, _additional: usize) -> bool {
-        false
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_slice_mut<L: AnyBufferLayout + LayoutMut>(self) -> ArcSliceMut<T, L> {
-        ArcSliceMut::new_array(self)
+    fn reserve(&mut self, additional: usize) -> bool {
+        self.reserve(additional);
+        true
     }
 }
 
-// pub(crate) trait BufferMutImpl<T> {
-//     fn as_mut_ptr(&mut self) -> NonNull<T>;
-//
-//     fn len(&self) -> usize;
-//
-//     fn capacity(&self) -> usize;
-//
-//     unsafe fn set_len(&mut self, len: usize) -> bool;
-//
-//     fn reserve(&mut self, additional: usize) -> bool;
-// }
-//
-// impl<T, B: BufferMut<T>> BufferMutImpl<T> for &mut B {
-//     fn as_mut_ptr(&mut self) -> NonNull<T> {
-//         B::as_mut_ptr(self)
-//     }
-//
-//     fn len(&self) -> usize {
-//         B::len(self)
-//     }
-//
-//     fn capacity(&self) -> usize {
-//         B::capacity(self)
-//     }
-//
-//     unsafe fn set_len(&mut self, len: usize) -> bool {
-//         unsafe { B::set_len(self, len) }
-//     }
-//
-//     fn reserve(&mut self, additional: usize) -> bool {
-//         B::reserve(self, additional)
-//     }
-// }
+pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
+    fn as_mut_ptr(&mut self) -> NonNull<S::Item> {
+        self.as_slice_mut().to_raw_parts_mut().0
+    }
 
-pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
     unsafe fn realloc(
         &mut self,
         additional: usize,
@@ -295,8 +454,14 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
         (NonNull::new_checked(new_ptr).cast(), new_capacity)
     }
 
-    unsafe fn shift_left(&mut self, offset: usize, length: usize) -> bool {
-        assert_checked(!mem::needs_drop::<T>());
+    unsafe fn shift_left(
+        &mut self,
+        offset: usize,
+        length: usize,
+        // do not use Self::as_mut_ptr as it will be invalidated with the reference
+        start: impl Fn(&mut Self) -> NonNull<S::Item>,
+    ) -> bool {
+        assert_checked(!mem::needs_drop::<S::Item>());
         let prev_len = self.len();
         if length == prev_len {
             return true;
@@ -304,13 +469,14 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
         if !unsafe { self.set_len(length) } {
             return false;
         }
-        let buffer_ptr = self.as_mut_ptr().as_ptr();
+        let src = unsafe { start(self).add(offset) }.as_ptr();
+        let dst = start(self).as_ptr();
         if offset == 0 {
             return true;
         } else if offset >= length {
-            unsafe { ptr::copy_nonoverlapping(buffer_ptr.add(offset), buffer_ptr, length) };
+            unsafe { ptr::copy_nonoverlapping(src, dst, length) };
         } else {
-            unsafe { ptr::copy(buffer_ptr.add(offset), buffer_ptr, length) };
+            unsafe { ptr::copy(src, dst, length) };
         }
         true
     }
@@ -321,92 +487,33 @@ pub(crate) trait BufferMutExt<T>: BufferMut<T> + Sized {
         length: usize,
         additional: usize,
         allocate: bool,
-    ) -> TryReserveResult<T> {
+        // do not use Self::as_mut_ptr as it will be invalidated with the reference
+        start: impl Fn(&mut Self) -> NonNull<S::Item>,
+    ) -> TryReserveResult<S::Item> {
         let capacity = self.capacity();
         if capacity - offset - length >= additional {
-            return (Ok(capacity - offset), unsafe {
-                self.as_mut_ptr().add(offset)
-            });
+            return (Ok(capacity - offset), unsafe { start(self).add(offset) });
         }
-        if !mem::needs_drop::<T>()
+        if !mem::needs_drop::<S::Item>()
             // conditions from `BytesMut::reserve_inner`
             && self.capacity() - length >= additional
             && offset >= length
-            && unsafe { self.shift_left(offset, length) }
+            && unsafe { self.shift_left(offset, length, &start) }
         {
-            return (Ok(capacity), self.as_mut_ptr());
+            return (Ok(capacity), start(self));
         }
         if allocate && unsafe { self.set_len(offset + length) } && self.reserve(additional) {
             return (Ok(self.capacity() - offset), unsafe {
-                self.as_mut_ptr().add(offset)
+                start(self).add(offset)
             });
         }
         (Err(TryReserveError::Unsupported), unsafe {
-            self.as_mut_ptr().add(offset)
+            start(self).add(offset)
         })
     }
 }
 
-impl<T, B: BufferMut<T>> BufferMutExt<T> for B {}
-
-pub trait StringBuffer: Sized + Send + 'static {
-    fn as_str(&self) -> &str;
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        true
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
-        unsafe { ArcStr::from_utf8_unchecked(StringBufferWrapper(self).into_arc_slice()) }
-    }
-}
-
-impl StringBuffer for &'static str {
-    #[inline]
-    fn as_str(&self) -> &str {
-        self
-    }
-
-    #[inline]
-    fn is_unique(&self) -> bool {
-        false
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
-        unsafe { ArcStr::from_utf8_unchecked(self.as_bytes().into_arc_slice()) }
-    }
-}
-
-impl StringBuffer for Box<str> {
-    #[inline]
-    fn as_str(&self) -> &str {
-        self
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
-        unsafe { ArcStr::from_utf8_unchecked(self.into_boxed_bytes().into_arc_slice()) }
-    }
-}
-
-impl StringBuffer for String {
-    #[inline]
-    fn as_str(&self) -> &str {
-        self
-    }
-
-    #[doc(hidden)]
-    #[inline(always)]
-    fn into_arc_str<L: AnyBufferLayout>(self) -> ArcStr<L> {
-        unsafe { ArcStr::from_utf8_unchecked(self.into_bytes().into_arc_slice()) }
-    }
-}
+impl<S: Slice + ?Sized, B: BufferMut<S>> BufferMutExt<S> for B {}
 
 #[cfg(feature = "raw-buffer")]
 /// # Safety
@@ -414,23 +521,17 @@ impl StringBuffer for String {
 /// - slice returned by [`Buffer::as_slice`] must not be invalidated by [`RawBuffer::into_raw`]
 /// - if [`BorrowMetadata`] is implemented, metadata returned by
 ///   [`BorrowMetadata::borrow_metadata`] must not be invalidated by [`RawBuffer::into_raw`]
-pub unsafe trait RawBuffer<T>: Buffer<T> + Clone {
+pub unsafe trait RawBuffer<S: ?Sized>: Buffer<S> + Clone {
     fn into_raw(self) -> *const ();
     /// # Safety
     /// The pointer must be obtained by a call to [`RawBuffer::into_raw`].
     unsafe fn from_raw(ptr: *const ()) -> Self;
 }
 
-/// # Safety
-///
-/// - slice returned by [`StringBuffer::as_str`] must not be invalidated by [`RawStringBuffer::into_raw`]
-/// - if [`BorrowMetadata`] is implemented, metadata returned by
-///   [`BorrowMetadata::borrow_metadata`] must not be invalidated by [`RawStringBuffer::into_raw`]
-pub unsafe trait RawStringBuffer: StringBuffer + Clone {
-    fn into_raw(self) -> *const ();
-    /// # Safety
-    /// The pointer must be obtained by a call to [`RawBuffer::into_raw`].
-    unsafe fn from_raw(ptr: *const ()) -> Self;
+pub trait BorrowMetadata: Sync {
+    type Metadata: Sync + 'static;
+
+    fn borrow_metadata(&self) -> &Self::Metadata;
 }
 
 unsafe impl<B: BorrowMetadata + Any> DynBuffer for B {
@@ -458,51 +559,52 @@ impl<B, M> BufferWithMetadata<B, M> {
     }
 }
 
-impl<T, B: Buffer<T>, M: Send + Sync + 'static> Buffer<T> for BufferWithMetadata<B, M> {
-    fn as_slice(&self) -> &[T] {
+impl<S: Slice + ?Sized, B: Buffer<S>, M: Send + Sync + 'static> Buffer<S>
+    for BufferWithMetadata<B, M>
+{
+    #[inline]
+    fn as_slice(&self) -> &S {
         self.buffer.as_slice()
     }
 
+    #[inline]
     fn is_unique(&self) -> bool {
         self.buffer.is_unique()
     }
 }
 
-unsafe impl<T, B: BufferMut<T>, M: Send + Sync + 'static> BufferMut<T>
+unsafe impl<S: Slice + ?Sized, B: BufferMut<S>, M: Send + Sync + 'static> BufferMut<S>
     for BufferWithMetadata<B, M>
 {
-    fn as_mut_ptr(&mut self) -> NonNull<T> {
-        self.buffer.as_mut_ptr()
+    #[inline]
+    fn as_slice_mut(&mut self) -> &mut S {
+        self.buffer.as_slice_mut()
     }
 
-    fn len(&self) -> usize {
-        self.buffer.len()
-    }
-
+    #[inline]
     fn capacity(&self) -> usize {
         self.buffer.capacity()
     }
 
+    #[inline]
     unsafe fn set_len(&mut self, len: usize) -> bool {
         unsafe { self.buffer.set_len(len) }
     }
 
+    #[inline]
     fn reserve(&mut self, _additional: usize) -> bool {
         self.buffer.reserve(_additional)
     }
 }
 
 #[cfg(feature = "raw-buffer")]
-unsafe impl<T, B: RawBuffer<T>> RawBuffer<T> for BufferWithMetadata<B, ()> {
+unsafe impl<S: Slice + ?Sized, B: RawBuffer<S>> RawBuffer<S> for BufferWithMetadata<B, ()> {
     fn into_raw(self) -> *const () {
         self.buffer.into_raw()
     }
 
     unsafe fn from_raw(ptr: *const ()) -> Self {
-        Self {
-            buffer: unsafe { B::from_raw(ptr) },
-            metadata: (),
-        }
+        Self::new(unsafe { B::from_raw(ptr) }, ())
     }
 }
 
@@ -520,55 +622,13 @@ unsafe impl<B: Any, M: Any> DynBuffer for BufferWithMetadata<B, M> {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct StringBufferWrapper<B>(pub(crate) B);
-
-impl<B: StringBuffer> Buffer<u8> for StringBufferWrapper<B> {
-    fn as_slice(&self) -> &[u8] {
-        self.0.as_str().as_bytes()
-    }
-
-    fn is_unique(&self) -> bool {
-        self.0.is_unique()
-    }
-}
-
-#[cfg(feature = "raw-buffer")]
-unsafe impl<B: RawStringBuffer> RawBuffer<u8> for StringBufferWrapper<B> {
-    fn into_raw(self) -> *const () {
-        self.0.into_raw()
-    }
-
-    unsafe fn from_raw(ptr: *const ()) -> Self {
-        Self(unsafe { B::from_raw(ptr) })
-    }
-}
-
-impl<B: BorrowMetadata> BorrowMetadata for StringBufferWrapper<B> {
-    type Metadata = B::Metadata;
-
-    fn borrow_metadata(&self) -> &Self::Metadata {
-        self.0.borrow_metadata()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct AsRefBuffer<B, const UNIQUE: bool = true>(pub B);
 
-impl<T: Send + Sync + 'static, B: AsRef<[T]> + Send + 'static, const UNIQUE: bool> Buffer<T>
+impl<S: ?Sized, B: AsRef<S> + Send + 'static, const UNIQUE: bool> Buffer<S>
     for AsRefBuffer<B, UNIQUE>
 {
-    fn as_slice(&self) -> &[T] {
-        self.0.as_ref()
-    }
-
-    fn is_unique(&self) -> bool {
-        UNIQUE
-    }
-}
-
-impl<B: AsRef<str> + Send + 'static, const UNIQUE: bool> StringBuffer for AsRefBuffer<B, UNIQUE> {
-    fn as_str(&self) -> &str {
+    fn as_slice(&self) -> &S {
         self.0.as_ref()
     }
 
@@ -587,19 +647,27 @@ pub trait BufferImpl<B>: Send + 'static {
     fn borrow_metadata(buffer: &B) -> &Self::Metadata;
 }
 
-#[derive(Debug)]
-pub struct BufferWithImpl<B, D> {
-    pub buffer: B,
-    _phantom: PhantomData<D>,
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait BufferMutImpl<B>: BufferImpl<B> + Sync {
+    fn buffer_slice_mut(buffer: &mut B) -> &mut Self::Slice;
+    fn buffer_capacity(buffer: &B) -> usize;
+    unsafe fn buffer_set_len(buffer: &mut B, len: usize) -> bool;
+    fn buffer_reserve(buffer: &mut B, additional: usize) -> bool;
 }
 
-impl<B: Clone, D> Clone for BufferWithImpl<B, D> {
+#[derive(Debug)]
+pub struct BufferWithImpl<B, I> {
+    pub buffer: B,
+    _phantom: PhantomData<I>,
+}
+
+impl<B: Clone, I> Clone for BufferWithImpl<B, I> {
     fn clone(&self) -> Self {
         Self::new(self.buffer.clone())
     }
 }
 
-impl<B, D> BufferWithImpl<B, D> {
+impl<B, I> BufferWithImpl<B, I> {
     pub fn new(buffer: B) -> Self {
         Self {
             buffer,
@@ -608,32 +676,40 @@ impl<B, D> BufferWithImpl<B, D> {
     }
 }
 
-impl<B: Sync, D: BufferImpl<B> + Sync> BorrowMetadata for BufferWithImpl<B, D> {
-    type Metadata = D::Metadata;
+impl<B: Sync, I: BufferImpl<B> + Sync> BorrowMetadata for BufferWithImpl<B, I> {
+    type Metadata = I::Metadata;
     fn borrow_metadata(&self) -> &Self::Metadata {
-        D::borrow_metadata(&self.buffer)
+        I::borrow_metadata(&self.buffer)
     }
 }
 
-impl<T: Send + Sync + 'static, B: Send + 'static, D: BufferImpl<B, Slice = [T]>> Buffer<T>
-    for BufferWithImpl<B, D>
+impl<S: ?Sized, B: Send + 'static, I: BufferImpl<B, Slice = S>> Buffer<S> for BufferWithImpl<B, I> {
+    fn as_slice(&self) -> &I::Slice {
+        I::buffer_slice(&self.buffer)
+    }
+
+    fn is_unique(&self) -> bool {
+        I::buffer_is_unique(&self.buffer)
+    }
+}
+
+unsafe impl<S: ?Sized, B: Send + Sync + 'static, I: BufferMutImpl<B, Slice = S>> BufferMut<S>
+    for BufferWithImpl<B, I>
 {
-    fn as_slice(&self) -> &D::Slice {
-        D::buffer_slice(&self.buffer)
+    fn as_slice_mut(&mut self) -> &mut S {
+        I::buffer_slice_mut(&mut self.buffer)
     }
 
-    fn is_unique(&self) -> bool {
-        D::buffer_is_unique(&self.buffer)
-    }
-}
-
-impl<B: Send + 'static, D: BufferImpl<B, Slice = str>> StringBuffer for BufferWithImpl<B, D> {
-    fn as_str(&self) -> &D::Slice {
-        D::buffer_slice(&self.buffer)
+    fn capacity(&self) -> usize {
+        I::buffer_capacity(&self.buffer)
     }
 
-    fn is_unique(&self) -> bool {
-        D::buffer_is_unique(&self.buffer)
+    unsafe fn set_len(&mut self, len: usize) -> bool {
+        unsafe { I::buffer_set_len(&mut self.buffer, len) }
+    }
+
+    fn reserve(&mut self, additional: usize) -> bool {
+        I::buffer_reserve(&mut self.buffer, additional)
     }
 }
 
@@ -652,50 +728,10 @@ const _: () = {
         }
     }
 
-    impl<T: Send + Sync + 'static> Buffer<T> for Arc<[T]> {
+    impl<S: ?Sized, B: Buffer<S> + Sync> Buffer<S> for Arc<B> {
         #[inline]
-        fn as_slice(&self) -> &[T] {
-            self
-        }
-
-        #[inline]
-        fn is_unique(&self) -> bool {
-            // Arc doesn't expose an API to check uniqueness with shared reference
-            // See `Arc::is_unique`, it cannot be done by simply checking strong/weak counts
-            false
-        }
-    }
-
-    impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> Buffer<T> for Arc<B> {
-        #[inline]
-        fn as_slice(&self) -> &[T] {
+        fn as_slice(&self) -> &S {
             self.as_ref().as_slice()
-        }
-
-        #[inline]
-        fn is_unique(&self) -> bool {
-            // See impl Buffer<T> for Arc<[T]>
-            false
-        }
-    }
-
-    impl StringBuffer for Arc<str> {
-        #[inline]
-        fn as_str(&self) -> &str {
-            self
-        }
-
-        #[inline]
-        fn is_unique(&self) -> bool {
-            // See impl Buffer<T> for Arc<[T]>
-            false
-        }
-    }
-
-    impl<B: StringBuffer + Send + Sync> StringBuffer for Arc<B> {
-        #[inline]
-        fn as_str(&self) -> &str {
-            self.as_ref().as_str()
         }
 
         #[inline]
@@ -718,36 +754,9 @@ const _: () = {
         }
     }
 
-    unsafe impl<B: StringBuffer + Send + Sync> RawStringBuffer for Arc<B> {
-        #[inline]
-        fn into_raw(self) -> *const () {
-            Arc::into_raw(self).cast()
-        }
-        #[inline]
-        unsafe fn from_raw(ptr: *const ()) -> Self {
-            unsafe { Arc::from_raw(ptr.cast()) }
-        }
-    }
-
     #[cfg(feature = "raw-buffer")]
-    unsafe impl<
-            T: Send + Sync + 'static,
-            B: Send + Sync + 'static,
-            D: BufferImpl<Arc<B>, Slice = [T]>,
-        > RawBuffer<T> for BufferWithImpl<Arc<B>, D>
-    {
-        fn into_raw(self) -> *const () {
-            Arc::into_raw(self.buffer).cast()
-        }
-
-        unsafe fn from_raw(ptr: *const ()) -> Self {
-            Self::new(unsafe { Arc::from_raw(ptr.cast()) })
-        }
-    }
-
-    #[cfg(feature = "raw-buffer")]
-    unsafe impl<B: Send + Sync + 'static, D: BufferImpl<Arc<B>, Slice = str>> RawStringBuffer
-        for BufferWithImpl<Arc<B>, D>
+    unsafe impl<S: ?Sized, B: Send + Sync + 'static, I: BufferImpl<Arc<B>, Slice = S>> RawBuffer<S>
+        for BufferWithImpl<Arc<B>, I>
     {
         fn into_raw(self) -> *const () {
             Arc::into_raw(self.buffer).cast()

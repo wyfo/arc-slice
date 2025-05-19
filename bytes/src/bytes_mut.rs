@@ -7,7 +7,7 @@ use core::{
     ptr,
 };
 
-use arc_slice::{layout::DefaultLayoutMut, ArcBytesMut, ArcSliceMut};
+use arc_slice::{layout::DefaultLayoutMut, ArcBytesMut};
 
 use crate::{buf::UninitSlice, Buf, BufMut, Bytes, TryGetError};
 
@@ -125,7 +125,7 @@ impl BytesMut {
             #[cold]
             fn realloc(bytes: &mut BytesMut, extend: &[u8]) {
                 let mut new_bytes = BytesMut::with_capacity(bytes.len() + extend.len());
-                unsafe { new_bytes.0.try_extend_from_slice(&bytes).unwrap_unchecked() };
+                unsafe { new_bytes.0.try_extend_from_slice(bytes).unwrap_unchecked() };
                 unsafe { new_bytes.0.try_extend_from_slice(extend).unwrap_unchecked() };
                 *bytes = new_bytes;
             }
@@ -235,7 +235,7 @@ unsafe impl BufMut for BytesMut {
 impl AsRef<[u8]> for BytesMut {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
+        self
     }
 }
 
@@ -244,21 +244,21 @@ impl Deref for BytesMut {
 
     #[inline]
     fn deref(&self) -> &[u8] {
-        self.as_ref()
+        &self.0
     }
 }
 
 impl AsMut<[u8]> for BytesMut {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
-        self.0.as_mut_slice()
+        self
     }
 }
 
 impl DerefMut for BytesMut {
     #[inline]
     fn deref_mut(&mut self) -> &mut [u8] {
-        self.as_mut()
+        &mut self.0
     }
 }
 
@@ -371,7 +371,7 @@ impl Extend<Bytes> for BytesMut {
 
 impl FromIterator<u8> for BytesMut {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> BytesMut {
-        let mut bytes = ArcSliceMut::new();
+        let mut bytes = ArcBytesMut::new();
         bytes.extend(into_iter);
         Self(bytes.into_shared())
     }
@@ -538,7 +538,7 @@ impl From<BytesMut> for Vec<u8> {
         bytes
             .0
             .try_into_buffer::<Vec<u8>>()
-            .unwrap_or_else(|bytes| bytes.as_slice().to_vec())
+            .unwrap_or_else(|bytes| bytes[..].to_vec())
     }
 }
 

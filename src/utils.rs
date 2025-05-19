@@ -6,7 +6,10 @@ use core::{
     ptr::NonNull,
 };
 
+#[allow(unused_imports)]
+use crate::msrv::StrictProvenance;
 use crate::{
+    buffer::{Slice, SliceExt, Subsliceable},
     macros::{is, is_not},
     msrv::{NonZero, Zeroable},
 };
@@ -22,20 +25,8 @@ pub(crate) fn try_transmute<T: Any, U: Any>(any: T) -> Result<U, T> {
 }
 
 #[inline(always)]
-pub(crate) fn try_transmute_slice<T: Any, U: Any>(slice: &[T]) -> Option<&[U]> {
-    is!(T, U).then(|| unsafe { slice.align_to().1 })
-}
-
-pub(crate) const fn slice_into_raw_parts<T>(slice: &[T]) -> (NonNull<T>, usize) {
-    (
-        // MSRV 1.65 const `<*const _>::cast_mut` + 1.85 const `NonNull::new`
-        unsafe { NonNull::new_unchecked(slice.as_ptr() as _) },
-        slice.len(),
-    )
-}
-
-pub(crate) unsafe fn static_slice<T: 'static>(start: NonNull<T>, length: usize) -> &'static [T] {
-    unsafe { core::slice::from_raw_parts(start.as_ptr(), length) }
+pub(crate) fn try_as_bytes<S: Slice + ?Sized>(slice: &S) -> Option<&[u8]> {
+    is!(&'static S, &'static [u8]).then(|| unsafe { slice.to_slice().align_to().1 })
 }
 
 /// Alternative implementation of `std::fmt::Debug` for byte slice.
@@ -69,11 +60,11 @@ fn debug_bytes(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
     Ok(())
 }
 
-pub(crate) fn debug_slice<T>(slice: &[T], f: &mut fmt::Formatter<'_>) -> fmt::Result
-where
-    T: fmt::Debug + 'static,
-{
-    match try_transmute_slice(slice) {
+pub(crate) fn debug_slice<S: fmt::Debug + Slice + ?Sized>(
+    slice: &S,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    match try_as_bytes(slice) {
         Some(bytes) => debug_bytes(bytes, f),
         None => write!(f, "{slice:?}"),
     }
@@ -93,7 +84,10 @@ pub(crate) fn upper_hex(slice: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result
     Ok(())
 }
 
-pub(crate) fn offset_len(len: usize, range: impl RangeBounds<usize>) -> (usize, usize) {
+pub(crate) fn offset_len<S: Slice + Subsliceable + ?Sized>(
+    slice: &S,
+    range: impl RangeBounds<usize>,
+) -> (usize, usize) {
     let offset = match range.start_bound() {
         Bound::Included(&n) => n,
         Bound::Excluded(&n) => n.checked_add(1).unwrap_or_else(|| panic_invalid_range()),
@@ -102,24 +96,30 @@ pub(crate) fn offset_len(len: usize, range: impl RangeBounds<usize>) -> (usize, 
     let end = match range.end_bound() {
         Bound::Included(&n) => n.checked_add(1).unwrap_or_else(|| panic_invalid_range()),
         Bound::Excluded(&n) => n,
-        Bound::Unbounded => len,
+        Bound::Unbounded => slice.len(),
     };
-    if end > len {
+    if end > slice.len() {
         panic_out_of_range();
     }
     let len = end
         .checked_sub(offset)
         .unwrap_or_else(|| panic_invalid_range());
+    unsafe { slice.check_subslice(offset, end) };
     (offset, len)
 }
 
-pub(crate) fn offset_len_subslice<T>(slice: &[T], subslice: &[T]) -> Option<(usize, usize)> {
-    let offset = (subslice.as_ptr() as usize).checked_sub(slice.as_ptr() as usize)?;
-    let len = subslice.len();
-    if offset + len > slice.len() {
+pub(crate) fn offset_len_subslice<S: Slice + Subsliceable + ?Sized>(
+    slice: &S,
+    subslice: &S,
+) -> Option<(usize, usize)> {
+    let sub_start = subslice.as_ptr().addr().get();
+    let start = slice.as_ptr().addr().get();
+    let offset = sub_start.checked_sub(start)?;
+    if offset + subslice.len() > slice.len() {
         return None;
     }
-    Some((offset, len))
+    unsafe { slice.check_subslice(offset, offset + subslice.len()) };
+    Some((offset, subslice.len()))
 }
 
 #[cold]

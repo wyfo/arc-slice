@@ -3,8 +3,8 @@ mod not_inlined {
     macro_rules! dummy {
         ($($name:ident),*) => {$(
             #[derive(Debug)]
-            pub struct $name<L = ()>(core::marker::PhantomData<L>);
-            impl<L> $name<L> {
+            pub struct $name<S: $crate::buffer::Slice<Item=u8> + ?Sized, L = ()>(core::marker::PhantomData<(S::Vec, L)>);
+            impl<S: $crate::buffer::Slice<Item=u8> + ?Sized, L> $name<S, L> {
                 pub fn len(&self) -> usize {
                     unimplemented!()
                 }
@@ -14,7 +14,7 @@ mod not_inlined {
                 pub fn capacity(&self) -> usize {
                     unimplemented!()
                 }
-                pub fn as_slice(&self) -> &[u8] {
+                pub fn as_bytes(&self) -> &[u8] {
                     unimplemented!()
                 }
                 pub fn advance(&mut self, _cnt: usize) {
@@ -30,9 +30,15 @@ mod not_inlined {
                     unimplemented!()
                 }
             }
+            impl<S: $crate::buffer::Slice<Item=u8> + ?Sized, L> core::ops::Deref for $name<S, L> {
+                type Target = [u8];
+                fn deref(&self) -> &Self::Target {
+                    unimplemented!()
+                }
+            }
         )*};
     }
-    dummy!(SmallBytes, SmallArcBytes, SmallStr, SmallArcStr);
+    dummy!(SmallSlice, SmallArcSlice);
 }
 #[cfg(not(feature = "inlined"))]
 pub use self::not_inlined::*;

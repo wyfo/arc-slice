@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::{
     any::{Any, TypeId},
     mem,
@@ -10,13 +9,12 @@ use core::{
 use crate::msrv::{ConstPtrExt, NonNullExt};
 use crate::{
     arc::{vtable as arc_vtable, Arc},
-    buffer::{Buffer, DynBuffer, RawBuffer},
+    buffer::{Buffer, DynBuffer, RawBuffer, Slice, SliceExt},
     layout::RawLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
     slice_mut,
     slice_mut::ArcSliceMutLayout,
-    utils::static_slice,
     vtable::{generic_take_buffer, VTable},
 };
 
@@ -26,8 +24,8 @@ mod static_vtable {
     #[allow(unused_imports)]
     use crate::msrv::NonNullExt;
     use crate::{
+        buffer::{Slice, SliceExt},
         macros::is_not,
-        utils::static_slice,
         vtable::{no_capacity, VTable},
     };
 
@@ -38,17 +36,17 @@ mod static_vtable {
     unsafe fn get_metadata(_ptr: *const (), _type_id: TypeId) -> Option<NonNull<()>> {
         None
     }
-    unsafe fn take_buffer<T: 'static>(
+    unsafe fn take_buffer<S: Slice + ?Sized>(
         buffer: NonNull<()>,
         _ptr: *const (),
         type_id: TypeId,
         start: NonNull<()>,
         length: usize,
     ) -> Option<NonNull<()>> {
-        if is_not!({ type_id }, &'static [T]) {
+        if is_not!({ type_id }, &'static S) {
             return None;
         }
-        unsafe { buffer.cast().write(static_slice(start.cast::<T>(), length)) };
+        unsafe { buffer.cast().write(S::from_raw_parts(start.cast(), length)) };
         Some(buffer)
     }
     unsafe fn drop(_ptr: *const ()) {}
@@ -58,7 +56,7 @@ mod static_vtable {
         None
     }
 
-    pub(super) const fn new_vtable<T: 'static>() -> &'static VTable {
+    pub(super) const fn new_vtable<S: Slice + ?Sized>() -> &'static VTable {
         &VTable {
             deallocate,
             drop,
@@ -66,7 +64,7 @@ mod static_vtable {
             clone,
             is_buffer_unique,
             get_metadata,
-            take_buffer: take_buffer::<T>,
+            take_buffer: take_buffer::<S>,
             capacity: no_capacity,
             try_reserve: None,
             into_arc,
@@ -81,7 +79,7 @@ mod raw_vtable {
     use crate::msrv::NonNullExt;
     use crate::{
         arc::Arc,
-        buffer::{DynBuffer, RawBuffer},
+        buffer::{DynBuffer, RawBuffer, Slice, SliceExt},
         macros::{is, is_not},
         vtable::{no_capacity, VTable},
     };
@@ -90,11 +88,11 @@ mod raw_vtable {
         unreachable!()
     }
 
-    unsafe fn is_buffer_unique<T, B: RawBuffer<T>>(ptr: *const ()) -> bool {
+    unsafe fn is_buffer_unique<S: ?Sized, B: RawBuffer<S>>(ptr: *const ()) -> bool {
         ManuallyDrop::new(unsafe { B::from_raw(ptr) }).is_unique()
     }
 
-    unsafe fn get_metadata<T, B: DynBuffer + RawBuffer<T>>(
+    unsafe fn get_metadata<S: ?Sized, B: DynBuffer + RawBuffer<S>>(
         ptr: *const (),
         type_id: TypeId,
     ) -> Option<NonNull<()>> {
@@ -104,7 +102,7 @@ mod raw_vtable {
         Some(NonNull::from(ManuallyDrop::new(unsafe { B::from_raw(ptr) }).get_metadata()).cast())
     }
 
-    unsafe fn take_buffer<T, B: DynBuffer + RawBuffer<T>>(
+    unsafe fn take_buffer<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
         buffer: NonNull<()>,
         ptr: *const (),
         type_id: TypeId,
@@ -119,42 +117,48 @@ mod raw_vtable {
         Some(buffer)
     }
 
-    unsafe fn drop<T, B: RawBuffer<T>>(ptr: *const ()) {
+    unsafe fn drop<S: ?Sized, B: RawBuffer<S>>(ptr: *const ()) {
         mem::drop(unsafe { B::from_raw(ptr) });
     }
-    unsafe fn clone<T, B: RawBuffer<T>>(ptr: *const ()) {
+    unsafe fn clone<S: ?Sized, B: RawBuffer<S>>(ptr: *const ()) {
         let _ = (*ManuallyDrop::new(unsafe { B::from_raw(ptr) })).clone();
     }
 
-    unsafe fn into_arc<T, B: DynBuffer + RawBuffer<T>>(ptr: *const ()) -> Option<NonNull<()>> {
-        Some(Arc::new_buffer(unsafe { B::from_raw(ptr) }).0.into_raw())
+    unsafe fn into_arc<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
+        ptr: *const (),
+    ) -> Option<NonNull<()>> {
+        let buffer = unsafe { B::from_raw(ptr) };
+        Some(Arc::<S>::new_buffer(buffer).0.into_raw())
     }
 
-    pub(super) const fn new_vtable<T, B: DynBuffer + RawBuffer<T>>() -> &'static VTable {
+    pub(super) const fn new_vtable<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
+    ) -> &'static VTable {
         &VTable {
             deallocate,
-            drop: drop::<T, B>,
-            drop_with_unique_hint: drop::<T, B>,
-            clone: clone::<T, B>,
-            is_buffer_unique: is_buffer_unique::<T, B>,
-            get_metadata: get_metadata::<T, B>,
-            take_buffer: take_buffer::<T, B>,
+            drop: drop::<S, B>,
+            drop_with_unique_hint: drop::<S, B>,
+            clone: clone::<S, B>,
+            is_buffer_unique: is_buffer_unique::<S, B>,
+            get_metadata: get_metadata::<S, B>,
+            take_buffer: take_buffer::<S, B>,
             capacity: no_capacity,
             try_reserve: None,
-            into_arc: into_arc::<T, B>,
+            into_arc: into_arc::<S, B>,
         }
     }
 }
 
-enum ArcOrVTable<T> {
-    Arc(ManuallyDrop<Arc<T, false>>),
+enum ArcOrVTable<S: Slice + ?Sized> {
+    Arc(ManuallyDrop<Arc<S, false>>),
     Vtable {
         ptr: *const (),
         vtable: &'static VTable,
     },
 }
 
-fn arc_or_vtable<T>((ptr, vtable): <RawLayout as ArcSliceLayout>::Data) -> ArcOrVTable<T> {
+fn arc_or_vtable<S: Slice + ?Sized>(
+    (ptr, vtable): <RawLayout as ArcSliceLayout>::Data,
+) -> ArcOrVTable<S> {
     match vtable {
         Some(vtable) => ArcOrVTable::Vtable { ptr, vtable },
         None => ArcOrVTable::Arc(ManuallyDrop::new(unsafe {
@@ -166,60 +170,62 @@ fn arc_or_vtable<T>((ptr, vtable): <RawLayout as ArcSliceLayout>::Data) -> ArcOr
 unsafe impl ArcSliceLayout for RawLayout {
     type Data = (*const (), Option<&'static VTable>);
     const STATIC_DATA: Option<Self::Data> =
-        Some((ptr::null(), Some(static_vtable::new_vtable::<()>())));
+        Some((ptr::null(), Some(static_vtable::new_vtable::<[()]>())));
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> =
-        MaybeUninit::new((ptr::null(), Some(static_vtable::new_vtable::<()>())));
+        MaybeUninit::new((ptr::null(), Some(static_vtable::new_vtable::<[()]>())));
 
-    fn data_from_arc<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self::Data {
+    fn data_from_arc<S: Slice + ?Sized, const ANY_BUFFER: bool>(
+        arc: Arc<S, ANY_BUFFER>,
+    ) -> Self::Data {
         let vtable = arc.vtable();
         (arc.into_raw().as_ptr(), vtable)
     }
 
-    fn data_from_arc_slice<T, const ANY_BUFFER: bool>(arc: Arc<T, ANY_BUFFER>) -> Self::Data {
+    fn data_from_arc_slice<S: Slice + ?Sized>(arc: Arc<S, false>) -> Self::Data {
         (arc.into_raw().as_ptr(), None)
     }
 
-    fn data_from_arc_buffer<T, const ANY_BUFFER: bool, B: DynBuffer + Buffer<T>>(
-        arc: Arc<T, ANY_BUFFER>,
+    fn data_from_arc_buffer<S: Slice + ?Sized, const ANY_BUFFER: bool, B: DynBuffer + Buffer<S>>(
+        arc: Arc<S, ANY_BUFFER>,
     ) -> Self::Data {
-        (arc.into_raw().as_ptr(), Some(arc_vtable::new::<T, B>()))
+        (arc.into_raw().as_ptr(), Some(arc_vtable::new::<S, B>()))
     }
 
-    fn data_from_static<T: Send + Sync + 'static>(_slice: &'static [T]) -> Self::Data {
-        (ptr::null(), Some(static_vtable::new_vtable::<T>()))
+    fn data_from_static<S: Slice + ?Sized>(_slice: &'static S) -> Self::Data {
+        (ptr::null(), Some(static_vtable::new_vtable::<S>()))
     }
 
-    fn data_from_vec<T: Send + Sync + 'static>(vec: Vec<T>) -> Self::Data {
+    fn data_from_vec<S: Slice + ?Sized>(vec: S::Vec) -> Self::Data {
         (
-            Arc::new_vec(vec).into_raw().as_ptr(),
-            Some(arc_vtable::new_vec::<T>()),
+            Arc::<S>::new_vec(vec).into_raw().as_ptr(),
+            Some(arc_vtable::new_vec::<S>()),
         )
     }
 
-    fn data_from_raw_buffer<T, B: DynBuffer + RawBuffer<T>>(
+    fn data_from_raw_buffer<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
         buffer: *const (),
     ) -> Option<Self::Data> {
-        Some((buffer, Some(raw_vtable::new_vtable::<T, B>())))
+        Some((buffer, Some(raw_vtable::new_vtable::<S, B>())))
     }
 
-    fn clone<T: Send + Sync + 'static>(
-        _start: NonNull<T>,
+    fn clone<S: Slice + ?Sized>(
+        _start: NonNull<S::Item>,
         _length: usize,
         data: &Self::Data,
     ) -> Self::Data {
-        match arc_or_vtable::<T>(*data) {
+        match arc_or_vtable::<S>(*data) {
             ArcOrVTable::Arc(arc) => mem::forget((*arc).clone()),
             ArcOrVTable::Vtable { ptr, vtable } => unsafe { (vtable.clone)(ptr) },
         }
         *data
     }
 
-    unsafe fn drop<T, const UNIQUE_HINT: bool>(
-        _start: NonNull<T>,
+    unsafe fn drop<S: Slice + ?Sized, const UNIQUE_HINT: bool>(
+        _start: NonNull<S::Item>,
         _length: usize,
         data: &mut ManuallyDrop<Self::Data>,
     ) {
-        match arc_or_vtable::<T>(**data) {
+        match arc_or_vtable::<S>(**data) {
             ArcOrVTable::Arc(arc) => {
                 ManuallyDrop::into_inner(arc).drop_with_unique_hint::<UNIQUE_HINT>();
             }
@@ -230,15 +236,15 @@ unsafe impl ArcSliceLayout for RawLayout {
         }
     }
 
-    fn is_unique<T>(data: &Self::Data) -> bool {
-        match arc_or_vtable::<T>(*data) {
+    fn is_unique<S: Slice + ?Sized>(data: &Self::Data) -> bool {
+        match arc_or_vtable::<S>(*data) {
             ArcOrVTable::Arc(arc) => arc.is_buffer_unique(),
             ArcOrVTable::Vtable { ptr, vtable } => unsafe { (vtable.is_buffer_unique)(ptr) },
         }
     }
 
-    fn get_metadata<T, M: Any>(data: &Self::Data) -> Option<&M> {
-        match arc_or_vtable::<T>(*data) {
+    fn get_metadata<S: Slice + ?Sized, M: Any>(data: &Self::Data) -> Option<&M> {
+        match arc_or_vtable::<S>(*data) {
             ArcOrVTable::Arc(arc) => Some(unsafe { &*ptr::from_ref(arc.get_metadata::<M>()?) }),
             ArcOrVTable::Vtable { ptr, vtable } => unsafe {
                 let metadata = (vtable.get_metadata)(ptr, TypeId::of::<M>())?;
@@ -247,12 +253,12 @@ unsafe impl ArcSliceLayout for RawLayout {
         }
     }
 
-    unsafe fn take_buffer<T: Send + Sync + 'static, B: Buffer<T>>(
-        start: NonNull<T>,
+    unsafe fn take_buffer<S: Slice + ?Sized, B: Buffer<S>>(
+        start: NonNull<S::Item>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
     ) -> Option<B> {
-        match arc_or_vtable::<T>(**data) {
+        match arc_or_vtable::<S>(**data) {
             ArcOrVTable::Arc(arc) => {
                 unsafe { ManuallyDrop::into_inner(arc).take_buffer::<B, false>(start, length) }
                     .map_err(mem::forget)
@@ -264,12 +270,27 @@ unsafe impl ArcSliceLayout for RawLayout {
         }
     }
 
-    unsafe fn mut_data<T: Send + Sync + 'static, L: ArcSliceMutLayout>(
+    unsafe fn take_array<T: Send + Sync + 'static, const N: usize>(
         start: NonNull<T>,
+        length: usize,
+        data: &mut ManuallyDrop<Self::Data>,
+    ) -> Option<[T; N]> {
+        match arc_or_vtable::<[T]>(**data) {
+            ArcOrVTable::Arc(arc) => {
+                unsafe { ManuallyDrop::into_inner(arc).take_array::<N, false>(start, length) }
+                    .map_err(mem::forget)
+                    .ok()
+            }
+            _ => None,
+        }
+    }
+
+    unsafe fn mut_data<S: Slice + ?Sized, L: ArcSliceMutLayout>(
+        start: NonNull<S::Item>,
         _length: usize,
         data: &mut ManuallyDrop<Self::Data>,
     ) -> Option<(usize, Option<slice_mut::Data>)> {
-        match arc_or_vtable::<T>(**data) {
+        match arc_or_vtable::<S>(**data) {
             ArcOrVTable::Arc(mut arc) => Some((
                 unsafe { arc.capacity(start)? },
                 Some(ManuallyDrop::into_inner(arc).into()),
@@ -284,16 +305,16 @@ unsafe impl ArcSliceLayout for RawLayout {
         }
     }
 
-    unsafe fn update_layout<T: Send + Sync + 'static, L: ArcSliceLayout>(
-        start: NonNull<T>,
+    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout>(
+        start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
     ) -> L::Data {
-        match arc_or_vtable::<T>(data) {
+        match arc_or_vtable::<S>(data) {
             ArcOrVTable::Arc(arc) => L::data_from_arc(ManuallyDrop::into_inner(arc)),
             ArcOrVTable::Vtable { ptr, vtable } => match unsafe { (vtable.into_arc)(ptr) } {
-                Some(arc) => L::data_from_arc(unsafe { Arc::<T>::from_raw(arc) }),
-                None => L::data_from_static(unsafe { static_slice(start, length) }),
+                Some(arc) => L::data_from_arc(unsafe { Arc::<S>::from_raw(arc) }),
+                None => L::data_from_static(unsafe { S::from_raw_parts(start, length) }),
             },
         }
     }

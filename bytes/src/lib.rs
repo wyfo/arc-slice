@@ -93,7 +93,7 @@ impl<L: arc_slice::layout::Layout> Buf for arc_slice::ArcBytes<L> {
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_slice()
+        self
     }
 
     fn advance(&mut self, cnt: usize) {
@@ -107,7 +107,7 @@ impl<L: arc_slice::layout::LayoutMut> Buf for arc_slice::ArcBytesMut<L> {
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_slice()
+        self
     }
 
     fn advance(&mut self, cnt: usize) {
@@ -137,7 +137,7 @@ impl<L: arc_slice::layout::Layout> Buf for arc_slice::ArcStr<L> {
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_slice()
+        self.as_bytes()
     }
 
     fn advance(&mut self, cnt: usize) {
@@ -145,13 +145,17 @@ impl<L: arc_slice::layout::Layout> Buf for arc_slice::ArcStr<L> {
     }
 }
 
-impl<L: arc_slice::layout::Layout> Buf for arc_slice::__private::SmallBytes<L> {
+impl<
+        S: arc_slice::buffer::Slice<Item = u8> + arc_slice::buffer::Subsliceable + ?Sized,
+        L: arc_slice::layout::Layout,
+    > Buf for arc_slice::__private::SmallSlice<S, L>
+{
     fn remaining(&self) -> usize {
         self.len()
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_slice()
+        arc_slice::buffer::Slice::to_slice(&**self)
     }
 
     fn advance(&mut self, cnt: usize) {
@@ -159,41 +163,17 @@ impl<L: arc_slice::layout::Layout> Buf for arc_slice::__private::SmallBytes<L> {
     }
 }
 
-impl<L: arc_slice::layout::Layout> Buf for arc_slice::__private::SmallArcBytes<L> {
+impl<
+        S: arc_slice::buffer::Slice<Item = u8> + arc_slice::buffer::Subsliceable + ?Sized,
+        L: arc_slice::layout::Layout,
+    > Buf for arc_slice::__private::SmallArcSlice<S, L>
+{
     fn remaining(&self) -> usize {
         self.len()
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_slice()
-    }
-
-    fn advance(&mut self, cnt: usize) {
-        self._advance(cnt);
-    }
-}
-
-impl<L: arc_slice::layout::Layout> Buf for arc_slice::__private::SmallStr<L> {
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    fn chunk(&self) -> &[u8] {
-        self.as_slice()
-    }
-
-    fn advance(&mut self, cnt: usize) {
-        self.advance(cnt);
-    }
-}
-
-impl<L: arc_slice::layout::Layout> Buf for arc_slice::__private::SmallArcStr<L> {
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    fn chunk(&self) -> &[u8] {
-        self.as_slice()
+        arc_slice::buffer::Slice::to_slice(&**self)
     }
 
     fn advance(&mut self, cnt: usize) {

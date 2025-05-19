@@ -5,10 +5,7 @@ use core::{
     ops::{Deref, RangeBounds},
 };
 
-use arc_slice::{
-    buffer::{AsRefBuffer, Buffer},
-    ArcBytes,
-};
+use arc_slice::{buffer::AsRefBuffer, ArcBytes};
 
 use crate::{Buf, BytesMut};
 
@@ -134,13 +131,13 @@ impl Deref for Bytes {
 impl AsRef<[u8]> for Bytes {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
+        self
     }
 }
 
 impl Borrow<[u8]> for Bytes {
     fn borrow(&self) -> &[u8] {
-        self.0.as_slice()
+        self
     }
 }
 
@@ -158,7 +155,7 @@ impl<'a> IntoIterator for &'a Bytes {
     type IntoIter = core::slice::Iter<'a, u8>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.as_slice().iter()
+        self.iter()
     }
 }
 
@@ -170,13 +167,13 @@ impl FromIterator<u8> for Bytes {
 
 impl PartialEq<[u8]> for Bytes {
     fn eq(&self, other: &[u8]) -> bool {
-        self.0.as_slice() == other
+        self[..] == *other
     }
 }
 
 impl PartialOrd<[u8]> for Bytes {
     fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(other)
+        self[..].partial_cmp(other)
     }
 }
 
@@ -194,13 +191,13 @@ impl PartialOrd<Bytes> for [u8] {
 
 impl PartialEq<str> for Bytes {
     fn eq(&self, other: &str) -> bool {
-        self.0.as_slice() == other.as_bytes()
+        self[..] == *other.as_bytes()
     }
 }
 
 impl PartialOrd<str> for Bytes {
     fn partial_cmp(&self, other: &str) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(other.as_bytes())
+        self[..].partial_cmp(other.as_bytes())
     }
 }
 
@@ -224,7 +221,7 @@ impl PartialEq<Vec<u8>> for Bytes {
 
 impl PartialOrd<Vec<u8>> for Bytes {
     fn partial_cmp(&self, other: &Vec<u8>) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(&other[..])
+        self[..].partial_cmp(&other[..])
     }
 }
 
@@ -248,7 +245,7 @@ impl PartialEq<String> for Bytes {
 
 impl PartialOrd<String> for Bytes {
     fn partial_cmp(&self, other: &String) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(other.as_bytes())
+        self[..].partial_cmp(other.as_bytes())
     }
 }
 
@@ -341,7 +338,7 @@ impl From<Bytes> for Vec<u8> {
         bytes
             .0
             .try_into_buffer::<Vec<u8>>()
-            .unwrap_or_else(|bytes| bytes.as_slice().to_vec())
+            .unwrap_or_else(|bytes| bytes[..].to_vec())
     }
 }
 

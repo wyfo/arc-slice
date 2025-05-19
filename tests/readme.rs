@@ -2,7 +2,7 @@
 fn readme_example() {
     use arc_slice::ArcSlice;
 
-    let mut bytes = <ArcSlice<u8>>::new(b"Hello world");
+    let mut bytes = <ArcSlice<[u8]>>::new(b"Hello world");
     let a = bytes.subslice(0..5);
 
     assert_eq!(a, b"Hello");
@@ -13,7 +13,7 @@ fn readme_example() {
     assert_eq!(b, b"Hello ");
 }
 
-#[cfg(feature = "default-layout-mut-any-buffer")]
+#[cfg(feature = "default-layout-any-buffer")]
 #[test]
 fn readme_example_shm() {
     use arc_slice::{
@@ -25,7 +25,7 @@ fn readme_example_shm() {
     struct MyShmBuffer(Shmem);
     unsafe impl Send for MyShmBuffer {}
     unsafe impl Sync for MyShmBuffer {}
-    impl Buffer<u8> for MyShmBuffer {
+    impl Buffer<[u8]> for MyShmBuffer {
         fn as_slice(&self) -> &[u8] {
             unsafe { self.0.as_slice() }
         }
