@@ -23,6 +23,7 @@ use crate::msrv::{ConstPtrExt, NonNullExt, SlicePtrExt};
 use crate::{
     error::TryReserveError,
     macros::assume,
+    msrv::SubPtrExt,
     slice_mut::TryReserveResult,
     utils::{assert_checked, NewChecked},
 };
@@ -342,8 +343,9 @@ impl Buffer<str> for String {
 }
 
 pub(crate) trait BufferExt<S: Slice + ?Sized>: Buffer<S> {
-    fn as_ptr(&self) -> NonNull<S::Item> {
-        self.as_slice().to_raw_parts().0
+    #[allow(unstable_name_collisions)]
+    unsafe fn offset(&self, start: NonNull<S::Item>) -> usize {
+        unsafe { start.sub_ptr(self.as_slice().as_ptr()) }
     }
 
     fn len(&self) -> usize {
@@ -430,10 +432,6 @@ unsafe impl BufferMut<str> for String {
 }
 
 pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
-    fn as_mut_ptr(&mut self) -> NonNull<S::Item> {
-        self.as_slice_mut().to_raw_parts_mut().0
-    }
-
     unsafe fn realloc(
         &mut self,
         additional: usize,
@@ -458,7 +456,7 @@ pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
         &mut self,
         offset: usize,
         length: usize,
-        // do not use Self::as_mut_ptr as it will be invalidated with the reference
+        // do not use the pointer derived from slice as it is invalidated with the slice
         start: impl Fn(&mut Self) -> NonNull<S::Item>,
     ) -> bool {
         assert_checked(!mem::needs_drop::<S::Item>());
@@ -487,7 +485,7 @@ pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
         length: usize,
         additional: usize,
         allocate: bool,
-        // do not use Self::as_mut_ptr as it will be invalidated with the reference
+        // do not use the pointer derived from slice as it is invalidated with the slice
         start: impl Fn(&mut Self) -> NonNull<S::Item>,
     ) -> TryReserveResult<S::Item> {
         let capacity = self.capacity();

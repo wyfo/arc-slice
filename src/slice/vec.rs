@@ -254,7 +254,7 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
             }
             Data::Capacity(capacity) if is!(B, S::Vec) => {
                 let mut vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
-                let offset = unsafe { start.sub_ptr(vec.as_mut_ptr()) };
+                let offset = unsafe { vec.offset(start) };
                 unsafe { vec.shift_left(offset, length, S::vec_start) };
                 Some(transmute_checked(vec))
             }
@@ -297,8 +297,8 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
                 Some(ManuallyDrop::into_inner(arc).into()),
             )),
             Data::Capacity(capacity) => {
-                let mut vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
-                let offset = unsafe { start.sub_ptr(vec.as_mut_ptr()) };
+                let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
+                let offset = unsafe { vec.offset(start) };
                 let data = Some(unsafe { L2::data_from_vec::<S>(vec, offset) });
                 Some((capacity.get() - offset, data))
             }

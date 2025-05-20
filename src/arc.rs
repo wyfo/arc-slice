@@ -238,7 +238,6 @@ pub(crate) mod vtable {
         buffer::{Buffer, BufferExt, BufferMut, BufferMutExt, DynBuffer, Slice, SliceExt},
         error::TryReserveError,
         macros::{is, is_not},
-        msrv::SubPtrExt,
         slice_mut::TryReserveResult,
         vtable::{no_capacity, VTable},
     };
@@ -281,7 +280,6 @@ pub(crate) mod vtable {
         Some(buffer)
     }
 
-    #[allow(unstable_name_collisions)]
     unsafe fn capacity<S: Slice + ?Sized, B: BufferMut<S>>(
         ptr: *const (),
         start: NonNull<()>,
@@ -290,8 +288,7 @@ pub(crate) mod vtable {
             Some(inner) => &unsafe { &*inner }.buffer,
             None => return usize::MAX,
         };
-        let offset = unsafe { start.cast().sub_ptr(buffer.as_ptr()) };
-        buffer.capacity() - offset
+        buffer.capacity() - unsafe { buffer.offset(start.cast()) }
     }
 
     #[allow(unstable_name_collisions)]
@@ -303,12 +300,15 @@ pub(crate) mod vtable {
         allocate: bool,
     ) -> TryReserveResult<()> {
         let buffer = &mut unsafe { ptr.cast::<ArcInner<B>>().as_mut() }.buffer;
-        let offset = unsafe { start.cast().sub_ptr(buffer.as_ptr()) };
+        let offset = unsafe { buffer.offset(start.cast()) };
         if S::needs_drop() && buffer.len() != offset + length {
             return (Err(TryReserveError::Unsupported), start);
         }
-        let (capacity, start) =
-            unsafe { buffer.try_reserve_impl(offset, length, additional, allocate, B::as_mut_ptr) };
+        let (capacity, start) = unsafe {
+            buffer.try_reserve_impl(offset, length, additional, allocate, |b| {
+                b.as_slice_mut().as_mut_ptr()
+            })
+        };
         (capacity, start.cast())
     }
 
