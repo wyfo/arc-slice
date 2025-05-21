@@ -82,9 +82,9 @@ impl DataPtr {
             Self::capacity_as_ptr(capacity),
             guard.as_ptr(),
             if cfg!(feature = "const-slice") {
-                Ordering::AcqRel
-            } else {
                 Ordering::Release
+            } else {
+                Ordering::AcqRel
             },
             Ordering::Acquire,
         ) {
