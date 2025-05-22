@@ -84,7 +84,7 @@ pub(crate) fn upper_hex(slice: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result
     Ok(())
 }
 
-pub(crate) fn offset_len<S: Slice + Subsliceable + ?Sized>(
+pub(crate) fn range_offset_len<S: Slice + Subsliceable + ?Sized>(
     slice: &S,
     range: impl RangeBounds<usize>,
 ) -> (usize, usize) {
@@ -108,18 +108,20 @@ pub(crate) fn offset_len<S: Slice + Subsliceable + ?Sized>(
     (offset, len)
 }
 
-pub(crate) fn offset_len_subslice<S: Slice + Subsliceable + ?Sized>(
+pub(crate) fn subslice_offset_len<S: Slice + Subsliceable + ?Sized>(
     slice: &S,
     subslice: &S,
-) -> Option<(usize, usize)> {
+) -> (usize, usize) {
     let sub_start = subslice.as_ptr().addr().get();
     let start = slice.as_ptr().addr().get();
-    let offset = sub_start.checked_sub(start)?;
+    let offset = sub_start
+        .checked_sub(start)
+        .unwrap_or_else(|| panic_out_of_range());
     if offset + subslice.len() > slice.len() {
-        return None;
+        panic_out_of_range()
     }
     unsafe { slice.check_subslice(offset, offset + subslice.len()) };
-    Some((offset, subslice.len()))
+    (offset, subslice.len())
 }
 
 #[cold]
@@ -162,9 +164,9 @@ extern "C" {
 
 #[inline(always)]
 pub(crate) fn unreachable_checked() -> ! {
-    #[cfg(debug_assertions)]
+    #[cfg(not(unreachable_checked))]
     unreachable!();
-    #[cfg(not(debug_assertions))]
+    #[cfg(unreachable_checked)]
     unsafe {
         __unreachable_checked()
     };

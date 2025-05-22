@@ -10,6 +10,7 @@ use crate::msrv::{ConstPtrExt, NonNullExt};
 use crate::{
     arc::{vtable as arc_vtable, Arc},
     buffer::{Buffer, DynBuffer, RawBuffer, Slice, SliceExt},
+    error::AllocErrorImpl,
     layout::RawLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
@@ -25,6 +26,7 @@ mod static_vtable {
     use crate::msrv::NonNullExt;
     use crate::{
         buffer::{Slice, SliceExt},
+        error::AllocError,
         macros::is_not,
         vtable::{no_capacity, VTable},
     };
@@ -55,6 +57,9 @@ mod static_vtable {
     unsafe fn into_arc(_ptr: *const ()) -> Option<NonNull<()>> {
         None
     }
+    unsafe fn into_arc_fallible(_ptr: *const ()) -> Result<Option<NonNull<()>>, AllocError> {
+        Ok(None)
+    }
 
     pub(super) const fn new_vtable<S: Slice + ?Sized>() -> &'static VTable {
         &VTable {
@@ -68,19 +73,22 @@ mod static_vtable {
             capacity: no_capacity,
             try_reserve: None,
             into_arc,
+            into_arc_fallible,
         }
     }
 }
 
 mod raw_vtable {
-    use core::{any::TypeId, mem, mem::ManuallyDrop, ptr::NonNull};
+    use core::{any::TypeId, convert::Infallible, mem, mem::ManuallyDrop, ptr::NonNull};
 
     #[allow(unused_imports)]
     use crate::msrv::NonNullExt;
     use crate::{
         arc::Arc,
         buffer::{DynBuffer, RawBuffer, Slice, SliceExt},
+        error::{AllocError, AllocErrorImpl},
         macros::{is, is_not},
+        utils::UnwrapChecked,
         vtable::{no_capacity, VTable},
     };
 
@@ -128,7 +136,17 @@ mod raw_vtable {
         ptr: *const (),
     ) -> Option<NonNull<()>> {
         let buffer = unsafe { B::from_raw(ptr) };
-        Some(Arc::<S>::new_buffer(buffer).0.into_raw())
+        let (arc, _, _) = Arc::<S>::new_buffer::<_, Infallible>(buffer).unwrap_checked();
+        Some(arc.into_raw())
+    }
+
+    unsafe fn into_arc_fallible<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
+        ptr: *const (),
+    ) -> Result<Option<NonNull<()>>, AllocError> {
+        let buffer = unsafe { B::from_raw(ptr) };
+        let (arc, _, _) =
+            Arc::<S>::new_buffer::<_, AllocError>(buffer).map_err(AllocError::forget)?;
+        Ok(Some(arc.into_raw()))
     }
 
     pub(super) const fn new_vtable<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
@@ -144,6 +162,7 @@ mod raw_vtable {
             capacity: no_capacity,
             try_reserve: None,
             into_arc: into_arc::<S, B>,
+            into_arc_fallible: into_arc_fallible::<S, B>,
         }
     }
 }
@@ -191,15 +210,19 @@ unsafe impl ArcSliceLayout for RawLayout {
         (arc.into_raw().as_ptr(), Some(arc_vtable::new::<S, B>()))
     }
 
-    fn data_from_static<S: Slice + ?Sized>(_slice: &'static S) -> Self::Data {
-        (ptr::null(), Some(static_vtable::new_vtable::<S>()))
+    fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
+        _slice: &'static S,
+    ) -> Result<Self::Data, &'static S> {
+        Ok((ptr::null(), Some(static_vtable::new_vtable::<S>())))
     }
 
-    fn data_from_vec<S: Slice + ?Sized>(vec: S::Vec) -> Self::Data {
-        (
-            Arc::<S>::new_vec(vec).into_raw().as_ptr(),
+    fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
+        vec: S::Vec,
+    ) -> Result<Self::Data, S::Vec> {
+        Ok((
+            Arc::<S>::new_vec::<E>(vec)?.into_raw().as_ptr(),
             Some(arc_vtable::new_vec::<S>()),
-        )
+        ))
     }
 
     fn data_from_raw_buffer<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
@@ -208,16 +231,16 @@ unsafe impl ArcSliceLayout for RawLayout {
         Some((buffer, Some(raw_vtable::new_vtable::<S, B>())))
     }
 
-    fn clone<S: Slice + ?Sized>(
+    fn clone<S: Slice + ?Sized, E: AllocErrorImpl>(
         _start: NonNull<S::Item>,
         _length: usize,
         data: &Self::Data,
-    ) -> Self::Data {
+    ) -> Result<Self::Data, E> {
         match arc_or_vtable::<S>(*data) {
             ArcOrVTable::Arc(arc) => mem::forget((*arc).clone()),
             ArcOrVTable::Vtable { ptr, vtable } => unsafe { (vtable.clone)(ptr) },
         }
-        *data
+        Ok(*data)
     }
 
     unsafe fn drop<S: Slice + ?Sized, const UNIQUE_HINT: bool>(
@@ -305,17 +328,23 @@ unsafe impl ArcSliceLayout for RawLayout {
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout>(
+    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
-    ) -> L::Data {
-        match arc_or_vtable::<S>(data) {
-            ArcOrVTable::Arc(arc) => L::data_from_arc(ManuallyDrop::into_inner(arc)),
-            ArcOrVTable::Vtable { ptr, vtable } => match unsafe { (vtable.into_arc)(ptr) } {
-                Some(arc) => L::data_from_arc(unsafe { Arc::<S>::from_raw(arc) }),
-                None => L::data_from_static(unsafe { S::from_raw_parts(start, length) }),
+    ) -> Result<L::Data, E> {
+        let res = match arc_or_vtable::<S>(data) {
+            ArcOrVTable::Arc(arc) => return Ok(L::data_from_arc(ManuallyDrop::into_inner(arc))),
+            ArcOrVTable::Vtable { ptr, vtable } if E::FALLIBLE => unsafe {
+                (vtable.into_arc_fallible)(ptr)
             },
+            ArcOrVTable::Vtable { ptr, vtable } => Ok(unsafe { (vtable.into_arc)(ptr) }),
+        };
+        match res {
+            Ok(Some(arc)) => Ok(L::data_from_arc(unsafe { Arc::<S>::from_raw(arc) })),
+            Ok(None) => L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) })
+                .map_err(E::forget),
+            Err(_) => Err(E::new()),
         }
     }
 }

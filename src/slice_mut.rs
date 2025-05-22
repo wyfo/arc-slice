@@ -12,27 +12,33 @@ use core::{
     ops::{Deref, DerefMut},
     ptr::NonNull,
     slice,
-    str::FromStr,
 };
 
+#[cfg(not(feature = "oom-handling"))]
+use crate::layout::{CloneNoAllocLayout, VecLayout};
 #[allow(unused_imports)]
 use crate::msrv::{NonNullExt, OptionExt, StrictProvenance};
 use crate::{
     arc::Arc,
-    buffer::{
-        BorrowMetadata, Buffer, BufferExt, BufferMut, BufferWithMetadata, Concatenable, DynBuffer,
-        Extendable, Slice, SliceExt,
-    },
-    error::TryReserveError,
+    buffer::{BufferExt, BufferMut, Concatenable, Extendable, Slice, SliceExt},
+    error::{AllocError, AllocErrorImpl, TryReserveError},
     layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, Layout, LayoutMut},
-    macros::{assume, is},
+    macros::assume,
     msrv::{ptr, NonZero},
     slice::ArcSliceLayout,
     utils::{
-        assert_checked, debug_slice, lower_hex, min_non_zero_cap, panic_out_of_range,
-        try_transmute, upper_hex, UnwrapChecked,
+        debug_slice, lower_hex, min_non_zero_cap, panic_out_of_range, try_transmute, upper_hex,
+        UnwrapChecked,
     },
     ArcSlice,
+};
+#[cfg(feature = "serde")]
+use crate::{buffer::Buffer, utils::assert_checked};
+#[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+use crate::{
+    buffer::{BorrowMetadata, BufferWithMetadata, DynBuffer},
+    macros::is,
+    utils::transmute_checked,
 };
 
 mod arc;
@@ -69,13 +75,16 @@ pub(crate) type TryReserveResult<T> = (Result<usize, TryReserveError>, NonNull<T
 
 #[allow(clippy::missing_safety_doc)]
 pub unsafe trait ArcSliceMutLayout {
-    unsafe fn data_from_vec<S: Slice + ?Sized>(vec: S::Vec, offset: usize) -> Data;
-    fn clone<S: Slice + ?Sized>(
+    unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
+        vec: S::Vec,
+        offset: usize,
+    ) -> Result<Data, S::Vec>;
+    fn clone<S: Slice + ?Sized, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
         data: &mut Data,
-    );
+    ) -> Result<(), E>;
     unsafe fn drop<S: Slice + ?Sized, const UNIQUE: bool>(
         start: NonNull<S::Item>,
         length: usize,
@@ -111,20 +120,20 @@ pub unsafe trait ArcSliceMutLayout {
         additional: usize,
         allocate: bool,
     ) -> TryReserveResult<S::Item>;
-    fn frozen_data<S: Slice + ?Sized, L: ArcSliceLayout>(
+    fn frozen_data<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
         data: Data,
-    ) -> L::Data;
+    ) -> Result<L::Data, E>;
     // unsafe because we must unsure `L: FromLayout<Self>`
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout>(
+    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
         _start: NonNull<S::Item>,
         _length: usize,
         _capacity: usize,
         data: Data,
-    ) -> Data {
-        data
+    ) -> Result<Data, E> {
+        Ok(data)
     }
 }
 
@@ -244,7 +253,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
             ),
             None if allocate => {
                 let capacity = cmp::max(min_non_zero_cap::<S::Item>(), additional);
-                let (arc, start) = Arc::<S>::with_capacity::<false>(capacity);
+                let (arc, start) = Arc::<S>::with_capacity::<AllocError, false>(capacity)?;
                 self.data = Some(arc.into());
                 (Ok(capacity), start)
             }
@@ -324,11 +333,8 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
 
     #[inline(always)]
     pub fn into_unique(self) -> Result<ArcSliceMut<S, L, true>, Self> {
-        if UNIQUE {
-            return Ok(try_transmute(self).ok().unwrap());
-        }
         let is_unique = <L as ArcSliceMutLayout>::is_unique::<S>;
-        if !self.data.is_some_and(is_unique) {
+        if !UNIQUE && !self.data.is_some_and(is_unique) {
             return Err(self);
         }
         Ok(unsafe { mem::transmute::<Self, ArcSliceMut<S, L, true>>(self) })
@@ -339,29 +345,54 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         unsafe { mem::transmute::<Self, ArcSliceMut<S, L, false>>(self) }
     }
 
-    #[inline]
-    pub fn freeze<L2: Layout + FromLayout<L>>(self) -> ArcSlice<S, L2> {
+    fn freeze_impl<L2: Layout + FromLayout<L>, E: AllocErrorImpl>(
+        self,
+    ) -> Result<ArcSlice<S, L2>, Self> {
         let this = ManuallyDrop::new(self);
         let data = match this.data {
-            Some(data) => L::frozen_data::<S, L2>(this.start, this.length, this.capacity, data),
-            None => L2::data_from_static(unsafe { S::from_raw_parts(this.start, this.length) }),
+            Some(data) => L::frozen_data::<S, L2, E>(this.start, this.length, this.capacity, data),
+            None => {
+                L2::data_from_static::<_, E>(unsafe { S::from_raw_parts(this.start, this.length) })
+                    .map_err(E::forget)
+            }
         };
-        ArcSlice::new_impl(this.start, this.length, data)
+        match data {
+            Ok(data) => Ok(ArcSlice::init(this.start, this.length, data)),
+            Err(_) => Err(ManuallyDrop::into_inner(this)),
+        }
+    }
+
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_freeze<L2: Layout + FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
+        self.freeze_impl::<L2, AllocError>()
     }
 
     #[inline]
-    pub fn with_layout<L2: LayoutMut + FromLayout<L>>(self) -> ArcSliceMut<S, L2, UNIQUE> {
+    fn with_layout_impl<L2: LayoutMut + FromLayout<L>, E: AllocErrorImpl>(
+        self,
+    ) -> Result<ArcSliceMut<S, L2, UNIQUE>, Self> {
         let this = ManuallyDrop::new(self);
-        let update_layout = <L as ArcSliceMutLayout>::update_layout::<S, L2>;
-        ArcSliceMut {
+        let update_layout = <L as ArcSliceMutLayout>::update_layout::<S, L2, E>;
+        Ok(ArcSliceMut {
             start: this.start,
             length: this.length,
             capacity: this.capacity,
             data: this
                 .data
-                .map(|data| unsafe { update_layout(this.start, this.length, this.capacity, data) }),
+                .map(|data| unsafe { update_layout(this.start, this.length, this.capacity, data) })
+                .transpose()
+                .map_err(|_| ManuallyDrop::into_inner(this))?,
             _phantom: PhantomData,
-        }
+        })
+    }
+
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_with_layout<L2: LayoutMut + FromLayout<L>>(
+        self,
+    ) -> Result<ArcSliceMut<S, L2, UNIQUE>, Self> {
+        self.with_layout_impl::<L2, AllocError>()
     }
 
     #[inline]
@@ -402,8 +433,26 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
     }
 }
 
+impl<
+        S: Slice + ?Sized,
+        #[cfg(feature = "oom-handling")] L: LayoutMut,
+        #[cfg(not(feature = "oom-handling"))] L: LayoutMut + CloneNoAllocLayout,
+        const UNIQUE: bool,
+    > ArcSliceMut<S, L, UNIQUE>
+{
+    #[inline]
+    pub fn freeze<L2: Layout + FromLayout<L>>(self) -> ArcSlice<S, L2> {
+        self.freeze_impl::<L2, Infallible>().unwrap_checked()
+    }
+
+    #[inline]
+    pub fn with_layout<L2: LayoutMut + FromLayout<L>>(self) -> ArcSliceMut<S, L2, UNIQUE> {
+        self.with_layout_impl::<L2, Infallible>().unwrap_checked()
+    }
+}
+
 impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
-    pub(crate) fn new_impl(
+    pub(crate) fn init(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
@@ -420,9 +469,10 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
 
     #[inline]
     pub fn new() -> Self {
-        Self::new_impl(NonNull::dangling(), 0, 0, None)
+        Self::init(NonNull::dangling(), 0, 0, None)
     }
 
+    #[cfg(feature = "oom-handling")]
     pub(crate) fn new_slice(slice: &S) -> Self
     where
         S::Item: Copy,
@@ -430,67 +480,107 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         if slice.is_empty() {
             return Self::new();
         }
-        let (arc, start) = Arc::<S, false>::new(slice);
-        Self::new_impl(start, slice.len(), slice.len(), Some(arc.into()))
+        let (arc, start) = Arc::<S, false>::new::<Infallible>(slice).unwrap_checked();
+        Self::init(start, slice.len(), slice.len(), Some(arc.into()))
     }
 
-    pub(crate) fn new_array<const N: usize>(array: [S::Item; N]) -> Self {
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    pub(crate) fn new_array_impl<E: AllocErrorImpl, const N: usize>(
+        array: [S::Item; N],
+    ) -> Result<Self, [S::Item; N]> {
         if N == 0 {
-            return Self::new();
+            return Ok(Self::new());
         }
-        let (arc, start) = Arc::<S, false>::new_array(array);
-        Self::new_impl(start, N, N, Some(arc.into()))
+        let (arc, start) = Arc::<S, false>::new_array::<E, N>(array)?;
+        Ok(Self::init(start, N, N, Some(arc.into())))
     }
 
+    #[cfg(feature = "serde")]
     pub(crate) fn new_bytes(slice: &S) -> Self {
         assert_checked(is!(S::Item, u8));
-        let (arc, start) = unsafe { Arc::<S, false>::new_unchecked(slice.to_slice()) };
-        Self::new_impl(start, slice.len(), slice.len(), Some(arc.into()))
+        let (arc, start) = unsafe {
+            Arc::<S, false>::new_unchecked::<Infallible>(slice.to_slice()).unwrap_checked()
+        };
+        Self::init(start, slice.len(), slice.len(), Some(arc.into()))
     }
 
-    pub(crate) fn new_vec(mut vec: S::Vec) -> Self {
-        let capacity = vec.capacity();
-        if capacity == 0 {
-            return Self::new();
-        }
+    #[cfg(feature = "serde")]
+    pub(crate) fn new_byte_vec(vec: S::Vec) -> Self {
+        assert_checked(is!(S::Item, u8));
         if !L::ANY_BUFFER {
             return Self::new_bytes(ManuallyDrop::new(vec).as_slice());
         }
+        Self::from_vec(vec)
+    }
+
+    pub(crate) fn from_vec_impl<E: AllocErrorImpl>(mut vec: S::Vec) -> Result<Self, S::Vec> {
+        let capacity = vec.capacity();
+        if capacity == 0 {
+            return Ok(Self::new());
+        }
         let start = S::vec_start(&mut vec);
         let length = vec.len();
-        let data = unsafe { <L as ArcSliceMutLayout>::data_from_vec::<S>(vec, 0) };
-        Self::new_impl(start, length, capacity, Some(data))
+        let data = unsafe { <L as ArcSliceMutLayout>::data_from_vec::<S, E>(vec, 0)? };
+        Ok(Self::init(start, length, capacity, Some(data)))
     }
 
-    fn with_capacity_impl<const ZEROED: bool>(capacity: usize) -> Self {
+    pub(crate) fn from_vec(vec: S::Vec) -> Self {
+        Self::from_vec_impl::<Infallible>(vec).unwrap_checked()
+    }
+
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    fn with_capacity_impl<E: AllocErrorImpl, const ZEROED: bool>(
+        capacity: usize,
+    ) -> Result<Self, E> {
         if capacity == 0 {
-            return Self::new();
+            return Ok(Self::new());
         }
-        let (arc, start) = Arc::<S>::with_capacity::<ZEROED>(capacity);
-        Self::new_impl(start, 0, capacity, Some(arc.into()))
+        let (arc, start) = Arc::<S>::with_capacity::<E, ZEROED>(capacity)?;
+        Ok(Self::init(start, 0, capacity, Some(arc.into())))
     }
 
+    #[cfg(feature = "oom-handling")]
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_capacity_impl::<false>(capacity)
+        Self::with_capacity_impl::<Infallible, false>(capacity).unwrap_checked()
     }
 
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_with_capacity(capacity: usize) -> Result<Self, AllocError> {
+        Self::with_capacity_impl::<AllocError, false>(capacity)
+    }
+
+    #[cfg(feature = "oom-handling")]
     #[inline]
     pub fn zeroed(capacity: usize) -> Self {
-        Self::with_capacity_impl::<true>(capacity)
+        Self::with_capacity_impl::<Infallible, true>(capacity).unwrap_checked()
     }
 
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_zeroed(capacity: usize) -> Result<Self, AllocError> {
+        Self::with_capacity_impl::<AllocError, true>(capacity)
+    }
+
+    #[cfg(feature = "oom-handling")]
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         if let Err(err) = self.try_reserve(additional) {
             #[cold]
             fn panic_reserve(err: TryReserveError) -> ! {
-                panic!("{err:?}")
+                match err {
+                    TryReserveError::AllocError => {
+                        alloc::alloc::handle_alloc_error(core::alloc::Layout::new::<()>())
+                    }
+                    err => panic!("{err:?}"),
+                }
             }
             panic_reserve(err);
         }
     }
 
+    #[cfg(feature = "oom-handling")]
     #[inline]
     pub fn extend_from_slice(&mut self, slice: &S)
     where
@@ -503,26 +593,24 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
 }
 
 impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L, false> {
-    unsafe fn clone(&mut self) -> Self {
+    unsafe fn clone_impl<E: AllocErrorImpl>(&mut self) -> Result<Self, E> {
         if let Some(data) = &mut self.data {
-            <L as ArcSliceMutLayout>::clone::<S>(self.start, self.length, self.capacity, data);
+            <L as ArcSliceMutLayout>::clone::<S, E>(self.start, self.length, self.capacity, data)?;
         }
-        Self {
+        Ok(Self {
             start: self.start,
             length: self.length,
             capacity: self.capacity,
             data: self.data,
             _phantom: self._phantom,
-        }
+        })
     }
 
-    #[inline]
-    #[must_use = "consider `ArcSliceMut::truncate` if you don't need the other half"]
-    pub fn split_off(&mut self, at: usize) -> Self {
+    fn split_off_impl<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, E> {
         if at > self.capacity {
             panic_out_of_range();
         }
-        let mut clone = unsafe { self.clone() };
+        let mut clone = unsafe { self.clone_impl()? };
         clone.start = unsafe { clone.start.add(at) };
         clone.capacity -= at;
         self.capacity = at;
@@ -532,22 +620,30 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L, false> {
             self.length = at;
             clone.length -= at;
         }
-        clone
+        Ok(clone)
     }
 
     #[inline]
-    #[must_use = "consider `ArcSliceMut::advance` if you don't need the other half"]
-    pub fn split_to(&mut self, at: usize) -> Self {
+    pub fn try_split_off(&mut self, at: usize) -> Result<Self, AllocError> {
+        self.split_off_impl::<AllocError>(at)
+    }
+
+    fn split_to_impl<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, E> {
         if at > self.length {
             panic_out_of_range();
         }
-        let mut clone = unsafe { self.clone() };
+        let mut clone = unsafe { self.clone_impl()? };
         clone.capacity = at;
         clone.length = at;
         self.start = unsafe { self.start.add(at) };
         self.capacity -= at;
         self.length -= at;
-        clone
+        Ok(clone)
+    }
+
+    #[inline]
+    pub fn try_split_to(&mut self, at: usize) -> Result<Self, AllocError> {
+        self.split_to_impl::<AllocError>(at)
     }
 
     #[inline]
@@ -565,31 +661,102 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L, false> {
     }
 }
 
+impl<
+        S: Slice + ?Sized,
+        #[cfg(feature = "oom-handling")] L: LayoutMut,
+        #[cfg(not(feature = "oom-handling"))] L: LayoutMut + CloneNoAllocLayout,
+    > ArcSliceMut<S, L, false>
+{
+    #[inline]
+    #[must_use = "consider `ArcSliceMut::truncate` if you don't need the other half"]
+    pub fn split_off(&mut self, at: usize) -> Self {
+        self.split_off_impl::<Infallible>(at).unwrap_checked()
+    }
+
+    #[inline]
+    #[must_use = "consider `ArcSliceMut::advance` if you don't need the other half"]
+    pub fn split_to(&mut self, at: usize) -> Self {
+        self.split_to_impl::<Infallible>(at).unwrap_checked()
+    }
+}
+
 impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
-    pub(crate) fn from_buffer_impl<B: DynBuffer + BufferMut<S>>(buffer: B) -> Self {
-        let (arc, start, length, capacity) = Arc::new_buffer_mut(buffer);
-        Self::new_impl(start, length, capacity, Some(arc.into()))
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    pub(crate) fn from_dyn_buffer_impl<B: DynBuffer + BufferMut<S>, E: AllocErrorImpl>(
+        buffer: B,
+    ) -> Result<Self, B> {
+        let (arc, start, length, capacity) = Arc::new_buffer_mut::<_, E>(buffer)?;
+        Ok(Self::init(start, length, capacity, Some(arc.into())))
     }
 
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    fn from_buffer_impl<B: BufferMut<S>, E: AllocErrorImpl>(mut buffer: B) -> Result<Self, B> {
+        match try_transmute::<B, S::Vec>(buffer) {
+            Ok(vec) => return Self::from_vec_impl::<E>(vec).map_err(transmute_checked),
+            Err(b) => buffer = b,
+        }
+        Self::from_dyn_buffer_impl::<_, E>(BufferWithMetadata::new(buffer, ()))
+            .map_err(|b| b.buffer())
+    }
+
+    #[cfg(feature = "oom-handling")]
+    #[inline]
     pub fn from_buffer<B: BufferMut<S>>(buffer: B) -> Self {
-        Self::from_buffer_with_metadata(buffer, ())
+        Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
+    #[cfg(feature = "oom-handling")]
+    #[inline]
+    pub fn try_from_buffer<B: BufferMut<S>>(buffer: B) -> Result<Self, B> {
+        Self::from_buffer_impl::<_, AllocError>(buffer)
+    }
+
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    fn from_buffer_with_metadata_impl<
+        B: BufferMut<S>,
+        M: Send + Sync + 'static,
+        E: AllocErrorImpl,
+    >(
+        buffer: B,
+        metadata: M,
+    ) -> Result<Self, (B, M)> {
+        if is!(M, ()) {
+            return Self::from_buffer_impl::<_, E>(buffer).map_err(|b| (b, metadata));
+        }
+        Self::from_dyn_buffer_impl::<_, E>(BufferWithMetadata::new(buffer, metadata))
+            .map_err(|b| b.into_tuple())
+    }
+
+    #[cfg(feature = "oom-handling")]
+    #[inline]
     pub fn from_buffer_with_metadata<B: BufferMut<S>, M: Send + Sync + 'static>(
-        mut buffer: B,
+        buffer: B,
         metadata: M,
     ) -> Self {
-        if is!(M, ()) {
-            match try_transmute::<B, S::Vec>(buffer) {
-                Ok(vec) => return Self::new_vec(vec),
-                Err(b) => buffer = b,
-            }
-        }
-        Self::from_buffer_impl(BufferWithMetadata::new(buffer, metadata))
+        Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata).unwrap_checked()
     }
 
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_from_buffer_with_metadata<B: BufferMut<S>, M: Send + Sync + 'static>(
+        buffer: B,
+        metadata: M,
+    ) -> Result<Self, (B, M)> {
+        Self::from_buffer_with_metadata_impl::<_, _, AllocError>(buffer, metadata)
+    }
+
+    #[cfg(feature = "oom-handling")]
+    #[inline]
     pub fn from_buffer_with_borrowed_metadata<B: BufferMut<S> + BorrowMetadata>(buffer: B) -> Self {
-        Self::from_buffer_impl(buffer)
+        Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
+    }
+
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_from_buffer_with_borrowed_metadata<B: BufferMut<S> + BorrowMetadata>(
+        buffer: B,
+    ) -> Result<Self, B> {
+        Self::from_dyn_buffer_impl::<_, AllocError>(buffer)
     }
 }
 
@@ -823,6 +990,7 @@ impl<L: LayoutMut, const UNIQUE: bool> PartialEq<ArcSliceMut<str, L, UNIQUE>> fo
     }
 }
 
+#[cfg(feature = "oom-handling")]
 impl<'a, S: Slice + ?Sized, L: LayoutMut> From<&'a S> for ArcSliceMut<S, L>
 where
     S::Item: Copy,
@@ -833,19 +1001,41 @@ where
     }
 }
 
+#[cfg(feature = "oom-handling")]
 impl<T: Send + Sync + 'static, L: AnyBufferLayout + LayoutMut> From<Vec<T>>
     for ArcSliceMut<[T], L>
 {
     #[inline]
     fn from(value: Vec<T>) -> Self {
-        Self::new_vec(value)
+        Self::from_vec(value)
     }
 }
 
+#[cfg(not(feature = "oom-handling"))]
+impl<T: Send + Sync + 'static> From<Vec<T>> for ArcSliceMut<[T], VecLayout> {
+    #[inline]
+    fn from(value: Vec<T>) -> Self {
+        Self::from_vec(value)
+    }
+}
+
+#[cfg(all(feature = "fallible-allocations", not(feature = "oom-handling")))]
+impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize> TryFrom<[T; N]>
+    for ArcSliceMut<[T], L>
+{
+    type Error = [T; N];
+
+    #[inline]
+    fn try_from(value: [T; N]) -> Result<Self, Self::Error> {
+        Self::new_array_impl::<AllocError, N>(value)
+    }
+}
+
+#[cfg(feature = "oom-handling")]
 impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize> From<[T; N]> for ArcSliceMut<[T], L> {
     #[inline]
     fn from(value: [T; N]) -> Self {
-        Self::new_array(value)
+        Self::new_array_impl::<Infallible, N>(value).unwrap_checked()
     }
 }
 
@@ -897,7 +1087,8 @@ impl<S: Slice + Extendable + ?Sized, L: LayoutMut> FromIterator<S::Item> for Arc
     }
 }
 
-impl<L: LayoutMut> FromStr for ArcSliceMut<str, L> {
+#[cfg(feature = "oom-handling")]
+impl<L: LayoutMut> core::str::FromStr for ArcSliceMut<str, L> {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

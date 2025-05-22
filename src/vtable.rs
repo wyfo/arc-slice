@@ -40,6 +40,9 @@ pub struct VTable {
     pub(crate) clone: unsafe fn(ptr: *const ()),
     #[cfg(feature = "raw-buffer")]
     pub(crate) into_arc: unsafe fn(ptr: *const ()) -> Option<NonNull<()>>,
+    #[cfg(feature = "raw-buffer")]
+    pub(crate) into_arc_fallible:
+        unsafe fn(ptr: *const ()) -> Result<Option<NonNull<()>>, crate::error::AllocError>,
 }
 
 pub(crate) unsafe fn no_capacity(_ptr: *const (), _start: NonNull<()>) -> usize {

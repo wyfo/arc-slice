@@ -3,6 +3,7 @@ use core::{any::Any, mem, mem::ManuallyDrop, ptr::NonNull};
 use crate::{
     arc::Arc,
     buffer::{BufferMut, Slice},
+    error::AllocErrorImpl,
     layout::ArcLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
@@ -12,26 +13,31 @@ use crate::{
 unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceMutLayout
     for ArcLayout<ANY_BUFFER, STATIC>
 {
-    unsafe fn data_from_vec<S: Slice + ?Sized>(vec: S::Vec, _offset: usize) -> Data {
-        Arc::<S>::new_vec(vec).into_raw().into()
+    unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
+        vec: S::Vec,
+        _offset: usize,
+    ) -> Result<Data, S::Vec> {
+        Ok(Arc::<S>::new_vec::<E>(vec)?.into_raw().into())
     }
 
-    fn clone<S: Slice + ?Sized>(
+    fn clone<S: Slice + ?Sized, E: AllocErrorImpl>(
         _start: NonNull<S::Item>,
         _length: usize,
         _capacity: usize,
         data: &mut Data,
-    ) {
+    ) -> Result<(), E> {
         mem::forget((*data.into_arc::<S, ANY_BUFFER>()).clone());
+        Ok(())
     }
 
     unsafe fn drop<S: Slice + ?Sized, const UNIQUE: bool>(
-        _start: NonNull<S::Item>,
-        _length: usize,
+        start: NonNull<S::Item>,
+        length: usize,
         _capacity: usize,
         data: Data,
     ) {
-        let arc = ManuallyDrop::into_inner(data.into_arc::<S, ANY_BUFFER>());
+        let mut arc = ManuallyDrop::into_inner(data.into_arc::<S, ANY_BUFFER>());
+        arc.set_length::<UNIQUE>(start, length);
         if UNIQUE {
             unsafe { arc.drop_unique() };
         } else {
@@ -84,12 +90,14 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceMutLayout
         res
     }
 
-    fn frozen_data<S: Slice + ?Sized, L: ArcSliceLayout>(
+    fn frozen_data<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         _start: NonNull<S::Item>,
         _length: usize,
         _capacity: usize,
         data: Data,
-    ) -> L::Data {
-        L::data_from_arc(ManuallyDrop::into_inner(data.into_arc::<S, ANY_BUFFER>()))
+    ) -> Result<L::Data, E> {
+        Ok(L::data_from_arc(ManuallyDrop::into_inner(
+            data.into_arc::<S, ANY_BUFFER>(),
+        )))
     }
 }

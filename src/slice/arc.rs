@@ -10,6 +10,7 @@ use crate::msrv::{BoolExt, ConstPtrExt, OptionExt};
 use crate::{
     arc::Arc,
     buffer::{Buffer, BufferWithMetadata, Slice, SliceExt},
+    error::AllocErrorImpl,
     layout::ArcLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
@@ -46,25 +47,31 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         Some(arc.into_raw())
     }
 
-    fn data_from_static<S: Slice + ?Sized>(slice: &'static S) -> Self::Data {
+    fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
+        slice: &'static S,
+    ) -> Result<Self::Data, &'static S> {
         if let Some(data) = Self::STATIC_DATA {
-            return data;
+            return Ok(data);
         }
         assert_checked(ANY_BUFFER);
-        Self::data_from_arc(Arc::new_buffer(BufferWithMetadata::new(slice, ())).0)
+        let (arc, _, _) =
+            Arc::new_buffer::<_, E>(BufferWithMetadata::new(slice, ())).map_err(|_| slice)?;
+        Ok(Self::data_from_arc(arc))
     }
 
-    fn data_from_vec<S: Slice + ?Sized>(vec: S::Vec) -> Self::Data {
+    fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
+        vec: S::Vec,
+    ) -> Result<Self::Data, S::Vec> {
         assert_checked(ANY_BUFFER);
-        Some(Arc::<S>::new_vec(vec).into_raw())
+        Ok(Some(Arc::<S>::new_vec::<E>(vec)?.into_raw()))
     }
 
-    fn clone<S: Slice + ?Sized>(
+    fn clone<S: Slice + ?Sized, E: AllocErrorImpl>(
         _start: NonNull<S::Item>,
         _length: usize,
         data: &Self::Data,
-    ) -> Self::Data {
-        Some((*Self::arc::<S>(data)?).clone().into_raw())
+    ) -> Result<Self::Data, E> {
+        Ok(Self::arc::<S>(data).map(|arc| (*arc).clone().into_raw()))
     }
 
     unsafe fn drop<S: Slice + ?Sized, const UNIQUE_HINT: bool>(
@@ -134,14 +141,15 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout>(
+    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
-    ) -> L::Data {
+    ) -> Result<L::Data, E> {
         match Self::arc::<S>(&data) {
-            Some(arc) => L::data_from_arc(ManuallyDrop::into_inner(arc)),
-            None => L::data_from_static(unsafe { S::from_raw_parts(start, length) }),
+            Some(arc) => Ok(L::data_from_arc(ManuallyDrop::into_inner(arc))),
+            None => L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) })
+                .map_err(E::forget),
         }
     }
 }

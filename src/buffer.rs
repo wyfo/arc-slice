@@ -1,9 +1,4 @@
-use alloc::{
-    alloc::{handle_alloc_error, realloc},
-    boxed::Box,
-    string::String,
-    vec::Vec,
-};
+use alloc::{alloc::realloc, boxed::Box, string::String, vec::Vec};
 use core::{
     alloc::{Layout, LayoutError},
     any::Any,
@@ -58,18 +53,21 @@ pub(crate) trait SliceExt: Slice {
     fn as_ptr(&self) -> NonNull<Self::Item> {
         NonNull::new_checked(self.to_slice().as_ptr().cast_mut())
     }
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn as_mut_ptr(&mut self) -> NonNull<Self::Item> {
         NonNull::new_checked(unsafe { self.to_slice_mut().as_mut_ptr() })
     }
     fn len(&self) -> usize {
         self.to_slice().len()
     }
+    #[cfg(feature = "oom-handling")]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
     fn to_raw_parts(&self) -> (NonNull<Self::Item>, usize) {
         (self.as_ptr(), self.len())
     }
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn to_raw_parts_mut(&mut self) -> (NonNull<Self::Item>, usize) {
         (self.as_mut_ptr(), self.len())
     }
@@ -378,7 +376,7 @@ pub unsafe trait BufferMut<S: ?Sized>: Buffer<S> + Sync {
     /// First `len` items of buffer slice must be initialized.
     unsafe fn set_len(&mut self, len: usize) -> bool;
 
-    fn reserve(&mut self, additional: usize) -> bool;
+    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError>;
 }
 
 unsafe impl<T: Send + Sync + 'static> BufferMut<[T]> for Vec<T> {
@@ -400,9 +398,13 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<[T]> for Vec<T> {
     }
 
     #[inline]
-    fn reserve(&mut self, additional: usize) -> bool {
-        self.reserve(additional);
-        true
+    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        let overflow = |len| (len as isize).checked_add(additional as isize).is_none();
+        match self.try_reserve(additional) {
+            Ok(()) => Ok(()),
+            Err(_) if overflow(self.len()) => Err(TryReserveError::CapacityOverflow),
+            Err(_) => Err(TryReserveError::AllocError),
+        }
     }
 }
 
@@ -425,31 +427,29 @@ unsafe impl BufferMut<str> for String {
     }
 
     #[inline]
-    fn reserve(&mut self, additional: usize) -> bool {
-        self.reserve(additional);
-        true
+    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        BufferMut::try_reserve(unsafe { self.as_mut_vec() }, additional)
     }
 }
 
 pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
-    unsafe fn realloc(
+    unsafe fn realloc<T>(
         &mut self,
         additional: usize,
-        ptr: NonNull<u8>,
+        ptr: NonNull<T>,
         layout: impl Fn(usize) -> Result<Layout, LayoutError>,
-    ) -> (NonNull<u8>, usize) {
+    ) -> Result<(NonNull<T>, usize), TryReserveError> {
         let required = self
             .len()
             .checked_add(additional)
-            .unwrap_or_else(|| panic!("capacity overflow"));
+            .ok_or(TryReserveError::CapacityOverflow)?;
         let new_capacity = max(self.capacity() * 2, required);
         let cur_layout = unsafe { layout(self.capacity()).unwrap_unchecked() };
-        let new_layout = layout(new_capacity).unwrap_or_else(|_| panic!("capacity overflow"));
-        let new_ptr = unsafe { realloc(ptr.as_ptr(), cur_layout, new_layout.size()) };
-        if new_ptr.is_null() {
-            handle_alloc_error(new_layout);
-        }
-        (NonNull::new_checked(new_ptr).cast(), new_capacity)
+        let new_layout = layout(new_capacity).map_err(|_| TryReserveError::CapacityOverflow)?;
+        let new_ptr =
+            NonNull::new(unsafe { realloc(ptr.as_ptr().cast(), cur_layout, new_layout.size()) })
+                .ok_or(TryReserveError::AllocError)?;
+        Ok((new_ptr.cast(), new_capacity))
     }
 
     unsafe fn shift_left(
@@ -500,10 +500,11 @@ pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
         {
             return (Ok(capacity), start(self));
         }
-        if allocate && unsafe { self.set_len(offset + length) } && self.reserve(additional) {
-            return (Ok(self.capacity() - offset), unsafe {
-                start(self).add(offset)
-            });
+        if allocate && unsafe { self.set_len(offset + length) } {
+            let capacity = self
+                .try_reserve(additional)
+                .map(|_| self.capacity() - offset);
+            return (capacity, unsafe { start(self).add(offset) });
         }
         (Err(TryReserveError::Unsupported), unsafe {
             start(self).add(offset)
@@ -555,6 +556,15 @@ impl<B, M> BufferWithMetadata<B, M> {
     pub(crate) fn new(buffer: B, metadata: M) -> Self {
         Self { buffer, metadata }
     }
+
+    pub(crate) fn buffer(self) -> B {
+        self.buffer
+    }
+
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    pub(crate) fn into_tuple(self) -> (B, M) {
+        (self.buffer, self.metadata)
+    }
 }
 
 impl<S: Slice + ?Sized, B: Buffer<S>, M: Send + Sync + 'static> Buffer<S>
@@ -590,8 +600,8 @@ unsafe impl<S: Slice + ?Sized, B: BufferMut<S>, M: Send + Sync + 'static> Buffer
     }
 
     #[inline]
-    fn reserve(&mut self, _additional: usize) -> bool {
-        self.buffer.reserve(_additional)
+    fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError> {
+        self.buffer.try_reserve(_additional)
     }
 }
 
@@ -650,7 +660,7 @@ pub unsafe trait BufferMutImpl<B>: BufferImpl<B> + Sync {
     fn buffer_slice_mut(buffer: &mut B) -> &mut Self::Slice;
     fn buffer_capacity(buffer: &B) -> usize;
     unsafe fn buffer_set_len(buffer: &mut B, len: usize) -> bool;
-    fn buffer_reserve(buffer: &mut B, additional: usize) -> bool;
+    fn buffer_reserve(buffer: &mut B, additional: usize) -> Result<(), TryReserveError>;
 }
 
 #[derive(Debug)]
@@ -706,7 +716,7 @@ unsafe impl<S: ?Sized, B: Send + Sync + 'static, I: BufferMutImpl<B, Slice = S>>
         unsafe { I::buffer_set_len(&mut self.buffer, len) }
     }
 
-    fn reserve(&mut self, additional: usize) -> bool {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         I::buffer_reserve(&mut self.buffer, additional)
     }
 }

@@ -1,17 +1,18 @@
 use alloc::vec::Vec;
-use core::{any::Any, mem, mem::ManuallyDrop, ptr::NonNull};
+use core::{any::Any, convert::Infallible, mem, mem::ManuallyDrop, ptr::NonNull};
 
 #[allow(unused_imports)]
 use crate::msrv::{NonNullExt, StrictProvenance};
 use crate::{
     arc::Arc,
     buffer::{BufferMut, BufferMutExt, Slice, SliceExt},
+    error::AllocErrorImpl,
     layout::VecLayout,
     macros::{assume, is},
     msrv::ptr,
     slice::ArcSliceLayout,
     slice_mut::{ArcSliceMutLayout, Data, TryReserveResult},
-    utils::{transmute_checked, NewChecked},
+    utils::{transmute_checked, NewChecked, UnwrapChecked},
 };
 
 const OFFSET_FLAG: usize = 0b01;
@@ -63,24 +64,28 @@ impl VecLayout {
 }
 
 unsafe impl ArcSliceMutLayout for VecLayout {
-    unsafe fn data_from_vec<S: Slice + ?Sized>(vec: S::Vec, offset: usize) -> Data {
+    unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
+        vec: S::Vec,
+        offset: usize,
+    ) -> Result<Data, S::Vec> {
         mem::forget(vec);
-        OffsetOrArc::Offset::<S>(offset).into()
+        Ok(OffsetOrArc::Offset::<S>(offset).into())
     }
 
-    fn clone<S: Slice + ?Sized>(
+    fn clone<S: Slice + ?Sized, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
         data: &mut Data,
-    ) {
+    ) -> Result<(), E> {
         match Self::offset_or_arc::<S>(*data) {
             OffsetOrArc::Arc(arc) => mem::forget((*arc).clone()),
             OffsetOrArc::Offset(offset) => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) };
-                *data = Arc::from(Arc::<S>::promote_vec(vec)).into();
+                *data = Arc::from(Arc::<S>::promote_vec::<E>(vec)?).into();
             }
         }
+        Ok(())
     }
 
     unsafe fn drop<S: Slice + ?Sized, const UNIQUE: bool>(
@@ -90,10 +95,15 @@ unsafe impl ArcSliceMutLayout for VecLayout {
         data: Data,
     ) {
         match Self::offset_or_arc::<S>(data) {
-            OffsetOrArc::Arc(arc) if UNIQUE => unsafe {
-                ManuallyDrop::into_inner(arc).drop_unique();
-            },
-            OffsetOrArc::Arc(arc) => drop(ManuallyDrop::into_inner(arc)),
+            OffsetOrArc::Arc(arc) => {
+                let mut arc = ManuallyDrop::into_inner(arc);
+                arc.set_length::<UNIQUE>(start, length);
+                if UNIQUE {
+                    unsafe { arc.drop_unique() };
+                } else {
+                    drop(arc);
+                }
+            }
             OffsetOrArc::Offset(offset) => {
                 drop(unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) });
             }
@@ -117,7 +127,7 @@ unsafe impl ArcSliceMutLayout for VecLayout {
         if S::needs_drop() {
             if let OffsetOrArc::Offset(offset) = Self::offset_or_arc::<S>(*data) {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) };
-                *data = Arc::<S>::new_vec(vec).into();
+                *data = Arc::<S>::new_vec::<Infallible>(vec).unwrap_checked().into();
             }
         }
     }
@@ -195,33 +205,33 @@ unsafe impl ArcSliceMutLayout for VecLayout {
         }
     }
 
-    fn frozen_data<S: Slice + ?Sized, L: ArcSliceLayout>(
+    fn frozen_data<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
         data: Data,
-    ) -> L::Data {
+    ) -> Result<L::Data, E> {
         match Self::offset_or_arc::<S>(data) {
-            OffsetOrArc::Arc(arc) => L::data_from_arc(ManuallyDrop::into_inner(arc)),
+            OffsetOrArc::Arc(arc) => Ok(L::data_from_arc(ManuallyDrop::into_inner(arc))),
             OffsetOrArc::Offset(offset) => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) };
-                L::data_from_vec::<S>(vec)
+                L::data_from_vec::<S, E>(vec).map_err(E::forget)
             }
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout>(
+    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
         data: Data,
-    ) -> Data {
+    ) -> Result<Data, E> {
         match Self::offset_or_arc::<S>(data) {
             OffsetOrArc::Offset(offset) => unsafe {
                 let vec = Self::rebuild_vec::<S>(start, length, capacity, offset);
-                L::data_from_vec::<S>(vec, offset)
+                L::data_from_vec::<S, E>(vec, offset).map_err(E::forget)
             },
-            _ => data,
+            _ => Ok(data),
         }
     }
 }

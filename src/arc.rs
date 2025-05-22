@@ -1,8 +1,4 @@
-use alloc::{
-    alloc::{alloc, alloc_zeroed, dealloc, handle_alloc_error},
-    boxed::Box,
-    vec::Vec,
-};
+use alloc::{alloc::dealloc, boxed::Box, vec::Vec};
 use core::{
     alloc::{Layout, LayoutError},
     any::{Any, TypeId},
@@ -17,8 +13,10 @@ use crate::msrv::{BoxExt, ConstPtrExt, NonNullExt, StrictProvenance};
 use crate::{
     atomic,
     atomic::AtomicUsize,
-    buffer::{Buffer, BufferMut, BufferMutExt, BufferWithMetadata, DynBuffer, Slice, SliceExt},
-    error::TryReserveError,
+    buffer::{
+        Buffer, BufferExt, BufferMut, BufferMutExt, BufferWithMetadata, DynBuffer, Slice, SliceExt,
+    },
+    error::{AllocErrorImpl, TryReserveError},
     macros::is,
     msrv::{ptr, NonZero, SubPtrExt},
     slice_mut::TryReserveResult,
@@ -83,15 +81,6 @@ struct WithLength<B> {
     buffer: B,
 }
 
-impl<T> WithLength<[T; 0]> {
-    fn new() -> Self {
-        Self {
-            length: 0,
-            buffer: [],
-        }
-    }
-}
-
 struct CompactVec<S: Slice + ?Sized> {
     start: NonNull<S::Item>,
     capacity: NonZero<usize>,
@@ -129,7 +118,7 @@ impl<S: Slice + ?Sized> CompactVec<S> {
         start: NonNull<()>,
         length: usize,
     ) -> Option<NonNull<()>> {
-        let inner = unsafe { vtable::check_unique::<Self>(ptr) }?;
+        let inner = unsafe { vtable::check_unique::<Self>(ptr)? };
         let vec = &unsafe { &*inner }.buffer;
         let capacity = vec.capacity.get();
         if is!({ type_id }, S::Vec) {
@@ -189,13 +178,13 @@ impl<S: Slice + ?Sized> CompactVec<S> {
                 self.length = len;
                 true
             }
-            fn reserve(&mut self, additional: usize) -> bool {
-                let start = self.arc.buffer.start.cast();
-                let (start, capacity) =
-                    unsafe { self.realloc(additional, start, Layout::array::<S::Item>) };
-                self.arc.buffer.start = start.cast();
+            fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+                let (start, capacity) = unsafe {
+                    self.realloc(additional, self.arc.buffer.start, Layout::array::<S::Item>)?
+                };
+                self.arc.buffer.start = start;
                 self.arc.buffer.capacity = unsafe { NonZero::new_unchecked(capacity) };
-                true
+                Ok(())
             }
         }
         let arc = ManuallyDrop::new(unsafe { Box::from_non_null(ptr.cast::<ArcInner<Self>>()) });
@@ -235,11 +224,15 @@ pub(crate) mod vtable {
     use crate::msrv::ConstPtrExt;
     use crate::{
         arc::{ArcInner, CompactVec},
-        buffer::{Buffer, BufferExt, BufferMut, BufferMutExt, DynBuffer, Slice, SliceExt},
-        error::TryReserveError,
+        buffer::{Buffer, BufferExt, DynBuffer, Slice, SliceExt},
         macros::{is, is_not},
-        slice_mut::TryReserveResult,
         vtable::{no_capacity, VTable},
+    };
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    use crate::{
+        buffer::{BufferMut, BufferMutExt},
+        error::TryReserveError,
+        slice_mut::TryReserveResult,
     };
 
     unsafe fn deallocate<B>(ptr: *mut ()) {
@@ -271,7 +264,7 @@ pub(crate) mod vtable {
         _start: NonNull<()>,
         length: usize,
     ) -> Option<NonNull<()>> {
-        let inner = unsafe { check_unique::<B>(ptr) }?;
+        let inner = unsafe { check_unique::<B>(ptr)? };
         if is_not!({ type_id }, B::Buffer) || unsafe { &*inner }.buffer.len() != length {
             return None;
         }
@@ -280,6 +273,7 @@ pub(crate) mod vtable {
         Some(buffer)
     }
 
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     unsafe fn capacity<S: Slice + ?Sized, B: BufferMut<S>>(
         ptr: *const (),
         start: NonNull<()>,
@@ -291,6 +285,7 @@ pub(crate) mod vtable {
         buffer.capacity() - unsafe { buffer.offset(start.cast()) }
     }
 
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     #[allow(unstable_name_collisions)]
     unsafe fn try_reserve<S: Slice + ?Sized, B: BufferMut<S>>(
         ptr: NonNull<()>,
@@ -338,6 +333,13 @@ pub(crate) mod vtable {
         NonNull::new(ptr.cast_mut())
     }
 
+    #[cfg(feature = "raw-buffer")]
+    unsafe fn into_arc_fallible(
+        ptr: *const (),
+    ) -> Result<Option<NonNull<()>>, crate::error::AllocError> {
+        Ok(NonNull::new(ptr.cast_mut()))
+    }
+
     pub(crate) fn new<S: ?Sized + Slice, B: DynBuffer + Buffer<S>>() -> &'static VTable {
         &VTable {
             deallocate: deallocate::<B>,
@@ -354,9 +356,12 @@ pub(crate) mod vtable {
             clone,
             #[cfg(feature = "raw-buffer")]
             into_arc,
+            #[cfg(feature = "raw-buffer")]
+            into_arc_fallible,
         }
     }
 
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn new_mut<S: ?Sized + Slice, B: DynBuffer + BufferMut<S>>() -> &'static VTable {
         &VTable {
             deallocate: deallocate::<B>,
@@ -373,6 +378,8 @@ pub(crate) mod vtable {
             clone,
             #[cfg(feature = "raw-buffer")]
             into_arc,
+            #[cfg(feature = "raw-buffer")]
+            into_arc_fallible,
         }
     }
 
@@ -395,6 +402,8 @@ pub(crate) mod vtable {
                 clone,
                 #[cfg(feature = "raw-buffer")]
                 into_arc,
+                #[cfg(feature = "raw-buffer")]
+                into_arc_fallible,
             }
         }
     }
@@ -425,39 +434,6 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         Ok(layout)
     }
 
-    fn allocate_slice<B, const ZEROED: bool>(capacity: usize, buffer: B) -> Self {
-        let layout = Self::slice_layout(capacity).expect("capacity overflow");
-        let inner_ptr = NonNull::new(unsafe {
-            if ZEROED {
-                alloc_zeroed(layout)
-            } else {
-                alloc(layout)
-            }
-        })
-        .unwrap_or_else(|| handle_alloc_error(layout))
-        .cast();
-        let inner = ArcInner {
-            refcount: AtomicUsize::new(1),
-            vtable_or_capacity: ptr::without_provenance(capacity),
-            buffer,
-        };
-        unsafe { inner_ptr.write(inner) };
-        Self {
-            inner: inner_ptr.cast(),
-            _phantom: PhantomData,
-        }
-    }
-
-    pub(crate) fn with_capacity<const ZEROED: bool>(capacity: usize) -> (Self, NonNull<S::Item>) {
-        let arc = if S::needs_drop() {
-            Self::allocate_slice::<WithLength<[S::Item; 0]>, ZEROED>(capacity, WithLength::new())
-        } else {
-            Self::allocate_slice::<[S::Item; 0], ZEROED>(capacity, [])
-        };
-        let start = unsafe { arc.slice_start() };
-        (arc, start)
-    }
-
     unsafe fn slice_start(&self) -> NonNull<S::Item> {
         NonNull::new_checked(if S::needs_drop() {
             let inner = self.inner.cast::<ArcInner<WithLength<[S::Item; 0]>>>();
@@ -471,33 +447,70 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
 
     unsafe fn slice_length(&self) -> Option<usize> {
         if S::needs_drop() {
-            let inner = unsafe {
-                self.inner
-                    .cast::<ArcInner<WithLength<[S::Item; 0]>>>()
-                    .as_ref()
-            };
-            Some(inner.buffer.length)
+            let inner = self.inner.cast::<ArcInner<WithLength<[S::Item; 0]>>>();
+            Some((unsafe { inner.as_ref() }).buffer.length)
         } else {
             None
         }
     }
 
-    pub(crate) unsafe fn new_unchecked(slice: &[S::Item]) -> (Self, NonNull<S::Item>) {
-        let (arc, start) = Self::with_capacity::<false>(slice.len());
-        unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), start.as_ptr(), slice.len()) };
-        (arc, start)
+    unsafe fn set_length_unchecked(&mut self, length: usize) {
+        assert_checked(S::needs_drop());
+        let inner = self.inner.cast::<ArcInner<WithLength<[S::Item; 0]>>>();
+        unsafe { addr_of_mut!((*inner.as_ptr()).buffer.length).write(length) };
     }
 
-    pub(crate) fn new(slice: &S) -> (Self, NonNull<S::Item>)
+    fn allocate_slice<E: AllocErrorImpl, const ZEROED: bool>(
+        capacity: usize,
+        length: usize,
+    ) -> Result<(Self, NonNull<S::Item>), E> {
+        let layout = Self::slice_layout(capacity).map_err(|_| E::capacity_overflow())?;
+        let inner_ptr = E::alloc::<_, ZEROED>(layout)?;
+        let inner = ArcInner {
+            refcount: AtomicUsize::new(1),
+            vtable_or_capacity: ptr::without_provenance(capacity),
+            buffer: (),
+        };
+        unsafe { inner_ptr.write(inner) };
+        let mut arc = Self {
+            inner: inner_ptr.cast(),
+            _phantom: PhantomData,
+        };
+        if S::needs_drop() {
+            unsafe { arc.set_length_unchecked(length) };
+        }
+        let start = unsafe { arc.slice_start() };
+        Ok((arc, start))
+    }
+
+    pub(crate) fn with_capacity<E: AllocErrorImpl, const ZEROED: bool>(
+        capacity: usize,
+    ) -> Result<(Self, NonNull<S::Item>), E> {
+        Self::allocate_slice::<E, ZEROED>(capacity, 0)
+    }
+
+    pub(crate) unsafe fn new_unchecked<E: AllocErrorImpl>(
+        slice: &[S::Item],
+    ) -> Result<(Self, NonNull<S::Item>), E> {
+        let (arc, start) = Self::allocate_slice::<E, false>(slice.len(), slice.len())?;
+        unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), start.as_ptr(), slice.len()) };
+        Ok((arc, start))
+    }
+
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    pub(crate) fn new<E: AllocErrorImpl>(slice: &S) -> Result<(Self, NonNull<S::Item>), E>
     where
         S::Item: Copy,
     {
         unsafe { Self::new_unchecked(slice.to_slice()) }
     }
 
-    pub(crate) fn new_array<const N: usize>(array: [S::Item; N]) -> (Self, NonNull<S::Item>) {
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn new_array<E: AllocErrorImpl, const N: usize>(
+        array: [S::Item; N],
+    ) -> Result<(Self, NonNull<S::Item>), [S::Item; N]> {
         let array = ManuallyDrop::new(array);
-        unsafe { Self::new_unchecked(&array[..]) }
+        unsafe { Self::new_unchecked::<E>(&array[..]) }.map_err(|_| ManuallyDrop::into_inner(array))
     }
 
     fn as_ptr(&self) -> *const () {
@@ -659,14 +672,14 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
                         self.length = len;
                         true
                     }
-                    fn reserve(&mut self, additional: usize) -> bool {
-                        let (start, capacity) = unsafe {
-                            self.realloc(additional, self.arc.inner.cast(), Arc::<S>::slice_layout)
+                    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+                        let (inner, capacity) = unsafe {
+                            self.realloc(additional, self.arc.inner, Arc::<S>::slice_layout)?
                         };
-                        self.arc.inner = start.cast();
+                        self.arc.inner = inner;
                         unsafe { self.arc.inner.as_mut() }.vtable_or_capacity =
                             ptr::without_provenance(capacity);
-                        true
+                        Ok(())
                     }
                 }
                 let mut buffer = ArcSlice {
@@ -707,6 +720,18 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         }
     }
 
+    #[allow(unstable_name_collisions)]
+    pub(crate) fn set_length<const UNIQUE: bool>(
+        &mut self,
+        start: NonNull<S::Item>,
+        length: usize,
+    ) {
+        if S::needs_drop() && (UNIQUE || self.is_unique()) {
+            let offset = unsafe { start.sub_ptr(self.slice_start()) };
+            unsafe { self.set_length_unchecked(offset + length) };
+        }
+    }
+
     pub(crate) unsafe fn drop_unique(self) {
         unsafe { ManuallyDrop::new(self).deallocate() };
     }
@@ -721,61 +746,89 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
 }
 
 impl<S: Slice + ?Sized> Arc<S> {
-    fn allocate_buffer<B>(refcount: usize, vtable: &'static VTable, buffer: B) -> Box<ArcInner<B>> {
+    #[allow(unstable_name_collisions)]
+    fn allocate_buffer<B, E: AllocErrorImpl>(
+        refcount: usize,
+        vtable: &'static VTable,
+        buffer: B,
+    ) -> Result<Box<ArcInner<B>>, B> {
         let vtable_ptr = ptr::from_ref(vtable);
-        Box::new(ArcInner {
+        let layout = Layout::new::<ArcInner<B>>();
+        // MSRV 1.65 let-else
+        let ptr = match E::alloc::<_, true>(layout) {
+            Ok(ptr) => ptr,
+            Err(_) => return Err(buffer),
+        };
+        let inner = ArcInner {
             refcount: AtomicUsize::new(refcount),
             vtable_or_capacity: vtable_ptr
                 .with_addr(VTABLE_FLAG | (vtable_ptr.addr() >> VTABLE_SHIFT))
                 .cast(),
             buffer,
-        })
+        };
+        unsafe { ptr.write(inner) }
+        Ok(unsafe { Box::from_non_null(ptr) })
     }
 
     #[allow(unstable_name_collisions)]
-    fn new_guard<B>(vtable: &'static VTable, buffer: B) -> ArcGuard<B> {
-        ArcGuard(Box::into_non_null(Self::allocate_buffer(1, vtable, buffer)))
+    fn new_guard<B, E: AllocErrorImpl>(
+        vtable: &'static VTable,
+        buffer: B,
+    ) -> Result<ArcGuard<B>, B> {
+        Ok(ArcGuard(Box::into_non_null(Self::allocate_buffer::<_, E>(
+            1, vtable, buffer,
+        )?)))
     }
 
-    pub(crate) fn new_vec(vec: S::Vec) -> Self {
+    pub(crate) fn new_vec<E: AllocErrorImpl>(vec: S::Vec) -> Result<Self, S::Vec> {
         if S::needs_drop() {
-            Self::new_guard(vtable::new_vec::<S>(), FullVec::<S>::new(vec, ())).into()
+            let guard = Self::new_guard::<_, E>(vtable::new_vec::<S>(), FullVec::<S>::new(vec, ()))
+                .map_err(|b| b.buffer())?;
+            Ok(guard.into())
         } else {
-            Self::new_guard(vtable::new_vec::<S>(), CompactVec::<S>::new(vec)).into()
+            let len = vec.len();
+            let guard = Self::new_guard::<_, E>(vtable::new_vec::<S>(), CompactVec::<S>::new(vec))
+                .map_err(|b| unsafe { b.to_vec(len) })?;
+            Ok(guard.into())
         }
     }
 
-    pub(crate) fn new_buffer<B: DynBuffer + Buffer<S>>(
+    pub(crate) fn new_buffer<B: DynBuffer + Buffer<S>, E: AllocErrorImpl>(
         buffer: B,
-    ) -> (Self, NonNull<S::Item>, usize) {
-        let arc = Self::new_guard(vtable::new::<S, B>(), buffer);
+    ) -> Result<(Self, NonNull<S::Item>, usize), B> {
+        let arc = Self::new_guard::<_, E>(vtable::new::<S, B>(), buffer)?;
         let (start, length) = arc.buffer().as_slice().to_raw_parts();
-        (arc.into(), start, length)
+        Ok((arc.into(), start, length))
     }
 
-    pub(crate) fn new_buffer_mut<B: DynBuffer + BufferMut<S>>(
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn new_buffer_mut<B: DynBuffer + BufferMut<S>, E: AllocErrorImpl>(
         buffer: B,
-    ) -> (Self, NonNull<S::Item>, usize, usize) {
-        let mut arc = Self::new_guard(vtable::new_mut::<S, B>(), buffer);
+    ) -> Result<(Self, NonNull<S::Item>, usize, usize), B> {
+        let mut arc = Self::new_guard::<_, E>(vtable::new_mut::<S, B>(), buffer)?;
         let (start, length) = arc.buffer_mut().as_slice_mut().to_raw_parts_mut();
         let capacity = arc.buffer_mut().capacity();
-        (arc.into(), start, length, capacity)
+        Ok((arc.into(), start, length, capacity))
     }
 
     #[allow(unstable_name_collisions)]
-    pub(crate) fn promote_vec(vec: S::Vec) -> PromoteGuard<S>
+    pub(crate) fn promote_vec<E: AllocErrorImpl>(vec: S::Vec) -> Result<PromoteGuard<S>, E>
 where {
-        fn guard<S: Slice + ?Sized, B>(vtable: &'static VTable, buffer: B) -> PromoteGuard<S> {
-            let arc = Arc::<S, true>::allocate_buffer(2, vtable, buffer);
-            PromoteGuard {
+        fn guard<S: Slice + ?Sized, B, E: AllocErrorImpl>(
+            vtable: &'static VTable,
+            buffer: B,
+        ) -> Result<PromoteGuard<S>, B> {
+            let arc = Arc::<S, true>::allocate_buffer::<_, E>(2, vtable, buffer)?;
+            Ok(PromoteGuard {
                 arc: Box::into_non_null(arc).cast(),
                 _phantom: PhantomData,
-            }
+            })
         }
         if S::needs_drop() {
-            guard(vtable::new_vec::<S>(), FullVec::<S>::new(vec, ()))
+            guard::<_, _, E>(vtable::new_vec::<S>(), FullVec::<S>::new(vec, ())).map_err(E::forget)
         } else {
-            guard(vtable::new_vec::<S>(), CompactVec::<S>::new(vec))
+            guard::<_, _, E>(vtable::new_vec::<S>(), CompactVec::<S>::new(vec)).map_err(E::forget)
         }
     }
 }
@@ -805,6 +858,7 @@ impl<B> ArcGuard<B> {
         &unsafe { self.0.as_ref() }.buffer
     }
 
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn buffer_mut(&mut self) -> &mut B {
         &mut unsafe { self.0.as_mut() }.buffer
     }

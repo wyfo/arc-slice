@@ -53,7 +53,7 @@ impl<S: Slice + ?Sized, L: Layout> IntoArcSlice<S> for ArcSlice<S, L> {
         ArcSlice::new_bytes(slice)
     }
     fn from_vec(vec: S::Vec) -> Self {
-        ArcSlice::new_vec(vec)
+        ArcSlice::new_byte_vec(vec)
     }
     fn from_arc_slice_mut(slice: ArcSliceMut<S, ArcLayout<false, false>>) -> Self {
         slice.freeze()
@@ -65,7 +65,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> IntoArcSlice<S> for ArcSliceMut<S, L> {
         ArcSliceMut::new_bytes(slice)
     }
     fn from_vec(vec: S::Vec) -> Self {
-        ArcSliceMut::new_vec(vec)
+        ArcSliceMut::new_byte_vec(vec)
     }
     fn from_arc_slice_mut(slice: ArcSliceMut<S, ArcLayout<false, false>>) -> Self {
         slice.with_layout()
@@ -192,7 +192,7 @@ const _: () = {
             SmallArcSlice::new(slice)
         }
         fn from_vec(vec: S::Vec) -> Self {
-            ArcSlice::<S, L>::new_vec(vec).into()
+            ArcSlice::<S, L>::from_vec(vec).into()
         }
         fn from_arc_slice_mut(slice: ArcSliceMut<S, ArcLayout<false, false>>) -> Self {
             slice.freeze().into()

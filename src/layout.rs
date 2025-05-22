@@ -1,6 +1,8 @@
 pub trait Layout: private::Layout {}
 pub trait AnyBufferLayout: Layout {}
 pub trait StaticLayout: Layout {}
+pub trait CloneNoAllocLayout: Layout {}
+pub trait TruncateNoAllocLayout: Layout {}
 pub trait LayoutMut: Layout + private::LayoutMut {}
 
 #[derive(Debug)]
@@ -11,19 +13,28 @@ pub struct ArcLayout<
 impl<const ANY_BUFFER: bool, const STATIC: bool> Layout for ArcLayout<ANY_BUFFER, STATIC> {}
 impl<const STATIC: bool> AnyBufferLayout for ArcLayout<true, STATIC> {}
 impl<const ANY_BUFFER: bool> StaticLayout for ArcLayout<ANY_BUFFER, true> {}
+impl<const ANY_BUFFER: bool, const STATIC: bool> CloneNoAllocLayout
+    for ArcLayout<ANY_BUFFER, STATIC>
+{
+}
+impl<const ANY_BUFFER: bool, const STATIC: bool> TruncateNoAllocLayout
+    for ArcLayout<ANY_BUFFER, STATIC>
+{
+}
 impl<const ANY_BUFFER: bool, const STATIC: bool> LayoutMut for ArcLayout<ANY_BUFFER, STATIC> {}
 
 #[derive(Debug)]
 pub struct BoxedSliceLayout;
 impl Layout for BoxedSliceLayout {}
-impl StaticLayout for BoxedSliceLayout {}
 impl AnyBufferLayout for BoxedSliceLayout {}
+impl StaticLayout for BoxedSliceLayout {}
 
 #[derive(Debug)]
 pub struct VecLayout;
 impl Layout for VecLayout {}
-impl StaticLayout for VecLayout {}
 impl AnyBufferLayout for VecLayout {}
+impl StaticLayout for VecLayout {}
+impl TruncateNoAllocLayout for VecLayout {}
 impl LayoutMut for VecLayout {}
 
 #[cfg(feature = "raw-buffer")]
@@ -35,6 +46,10 @@ impl Layout for RawLayout {}
 impl StaticLayout for RawLayout {}
 #[cfg(feature = "raw-buffer")]
 impl AnyBufferLayout for RawLayout {}
+#[cfg(feature = "raw-buffer")]
+impl CloneNoAllocLayout for RawLayout {}
+#[cfg(feature = "raw-buffer")]
+impl TruncateNoAllocLayout for RawLayout {}
 
 pub trait FromLayout<L: Layout>: Layout {}
 

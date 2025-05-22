@@ -1,28 +1,30 @@
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use core::{
     borrow::Borrow,
-    cmp,
-    convert::Infallible,
-    fmt,
+    cmp, fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
     mem::{size_of, ManuallyDrop, MaybeUninit},
     ops::{Deref, RangeBounds},
     ptr::addr_of,
     slice,
-    str::FromStr,
 };
 
 use either::Either;
 
+#[cfg(feature = "fallible-allocations")]
+use crate::error::AllocError;
+#[cfg(feature = "oom-handling")]
+use crate::layout::AnyBufferLayout;
+#[cfg(not(feature = "oom-handling"))]
+use crate::layout::CloneNoAllocLayout;
 use crate::{
-    buffer::{Buffer, Slice, SliceExt, Subsliceable},
-    layout::{
-        AnyBufferLayout, ArcLayout, BoxedSliceLayout, DefaultLayout, Layout, StaticLayout,
-        VecLayout,
-    },
+    buffer::{Slice, SliceExt, Subsliceable},
+    layout::{ArcLayout, BoxedSliceLayout, DefaultLayout, Layout, StaticLayout, VecLayout},
     msrv::ptr,
-    utils::{debug_slice, lower_hex, offset_len, panic_out_of_range, upper_hex, UnwrapChecked},
+    utils::{
+        debug_slice, lower_hex, panic_out_of_range, range_offset_len, upper_hex, UnwrapChecked,
+    },
     ArcSlice,
 };
 
@@ -145,7 +147,7 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
     where
         S: Subsliceable,
     {
-        let (offset, len) = offset_len(self.deref(), range);
+        let (offset, len) = range_offset_len(self.deref(), range);
         Self {
             offset: self.offset + offset as u8,
             tagged_length: len as u8 | INLINED_FLAG,
@@ -327,9 +329,17 @@ union Inner<S: Slice<Item = u8> + ?Sized, L: Layout> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
+    #[cfg(feature = "oom-handling")]
     #[inline]
     pub fn new(slice: &S) -> Self {
         SmallSlice::new(slice).map_or_else(|| ArcSlice::new(slice).into(), Into::into)
+    }
+
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_new(slice: &S) -> Result<Self, AllocError> {
+        SmallSlice::new(slice)
+            .map_or_else(|| Ok(ArcSlice::try_new(slice)?.into()), |s| Ok(s.into()))
     }
 
     #[inline(always)]
@@ -381,14 +391,15 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
+    #[cfg(feature = "fallible-allocations")]
     #[inline]
-    pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self
+    pub fn try_subslice(&self, range: impl RangeBounds<usize>) -> Result<Self, AllocError>
     where
         S: Subsliceable,
     {
         match self.as_either() {
-            Either::Left(bytes) => bytes.subslice(range).into(),
-            Either::Right(bytes) => bytes.subslice(range).into(),
+            Either::Left(bytes) => Ok(bytes.subslice(range).into()),
+            Either::Right(bytes) => Ok(bytes.try_subslice(range)?.into()),
         }
     }
 
@@ -400,6 +411,24 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         match self.as_either_mut() {
             Either::Left(s) => s.advance(cnt),
             Either::Right(s) => s.advance(cnt),
+        }
+    }
+}
+
+impl<
+        S: Slice<Item = u8> + ?Sized,
+        #[cfg(feature = "oom-handling")] L: Layout,
+        #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
+    > SmallArcSlice<S, L>
+{
+    #[inline]
+    pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self
+    where
+        S: Subsliceable,
+    {
+        match self.as_either() {
+            Either::Left(bytes) => bytes.subslice(range).into(),
+            Either::Right(bytes) => bytes.subslice(range).into(),
         }
     }
 }
@@ -422,13 +451,6 @@ impl<L: StaticLayout> SmallArcSlice<str, L> {
     }
 }
 
-impl<S: Slice<Item = u8> + ?Sized, L: AnyBufferLayout> SmallArcSlice<S, L> {
-    #[inline]
-    pub fn from_buffer<B: Buffer<S>>(buffer: B) -> Self {
-        ArcSlice::from_buffer(buffer).into()
-    }
-}
-
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> Drop for SmallArcSlice<S, L> {
     #[inline]
     fn drop(&mut self) {
@@ -438,7 +460,12 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> Drop for SmallArcSlice<S, L> {
     }
 }
 
-impl<S: Slice<Item = u8> + ?Sized, L: Layout> Clone for SmallArcSlice<S, L> {
+impl<
+        S: Slice<Item = u8> + ?Sized,
+        #[cfg(feature = "oom-handling")] L: Layout,
+        #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
+    > Clone for SmallArcSlice<S, L>
+{
     #[inline]
     fn clone(&self) -> Self {
         match self.as_either() {
@@ -608,24 +635,39 @@ impl<L: Layout> PartialEq<SmallArcSlice<str, L>> for String {
     }
 }
 
+#[cfg(all(feature = "fallible-allocations", not(feature = "oom-handling")))]
+impl<L: Layout, const N: usize> TryFrom<[u8; N]> for SmallArcSlice<[u8], L> {
+    type Error = [u8; N];
+    fn try_from(value: [u8; N]) -> Result<Self, Self::Error> {
+        SmallSlice::new(&value[..])
+            .map_or_else(|| Ok(ArcSlice::try_from(value)?.into()), |s| Ok(s.into()))
+    }
+}
+
+#[cfg(feature = "oom-handling")]
 impl<L: Layout, const N: usize> From<[u8; N]> for SmallArcSlice<[u8], L> {
     fn from(value: [u8; N]) -> Self {
         SmallSlice::new(&value[..]).map_or_else(|| ArcSlice::from(value).into(), Into::into)
     }
 }
 
-impl<S: Slice<Item = u8> + ?Sized, L: AnyBufferLayout> From<Box<S>> for SmallArcSlice<S, L> {
-    fn from(value: Box<S>) -> Self {
+#[cfg(feature = "oom-handling")]
+impl<S: Slice<Item = u8> + ?Sized, L: AnyBufferLayout> From<alloc::boxed::Box<S>>
+    for SmallArcSlice<S, L>
+{
+    fn from(value: alloc::boxed::Box<S>) -> Self {
         ArcSlice::from(value).into()
     }
 }
 
+#[cfg(feature = "oom-handling")]
 impl<L: AnyBufferLayout> From<Vec<u8>> for SmallArcSlice<[u8], L> {
     fn from(value: Vec<u8>) -> Self {
         ArcSlice::from(value).into()
     }
 }
 
+#[cfg(feature = "oom-handling")]
 impl<L: AnyBufferLayout> From<String> for SmallArcSlice<str, L> {
     fn from(value: String) -> Self {
         ArcSlice::from(value).into()
@@ -648,8 +690,9 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> From<ArcSlice<S, L>> for SmallArcS
     }
 }
 
-impl<L: Layout> FromStr for SmallArcSlice<str, L> {
-    type Err = Infallible;
+#[cfg(feature = "oom-handling")]
+impl<L: Layout> core::str::FromStr for SmallArcSlice<str, L> {
+    type Err = core::convert::Infallible;
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {

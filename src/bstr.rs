@@ -7,7 +7,10 @@ use bstr::{BStr, BString, ByteSlice};
 
 #[cfg(feature = "serde")]
 use crate::buffer::Deserializable;
-use crate::buffer::{Buffer, BufferMut, Concatenable, Extendable, Slice, Subsliceable};
+use crate::{
+    buffer::{Buffer, BufferMut, Concatenable, Extendable, Slice, Subsliceable},
+    error::TryReserveError,
+};
 
 unsafe impl Slice for BStr {
     type Item = u8;
@@ -101,8 +104,7 @@ unsafe impl BufferMut<BStr> for BString {
         true
     }
 
-    fn reserve(&mut self, additional: usize) -> bool {
-        (**self).reserve(additional);
-        true
+    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        BufferMut::try_reserve(&mut **self, additional)
     }
 }

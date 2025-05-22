@@ -12,6 +12,7 @@ use crate::{
     arc::Arc,
     atomic::{AtomicPtr, Ordering},
     buffer::{Buffer, BufferExt, BufferMut, BufferMutExt, Slice, SliceExt},
+    error::{AllocError, AllocErrorImpl},
     layout::{BoxedSliceLayout, VecLayout},
     macros::is,
     msrv::{ptr, NonZero, SubPtrExt},
@@ -72,9 +73,9 @@ impl DataPtr {
     }
 
     #[cold]
-    fn promote_vec<S: Slice + ?Sized>(&self, vec: S::Vec) -> DataPtr {
+    fn promote_vec<S: Slice + ?Sized, E: AllocErrorImpl>(&self, vec: S::Vec) -> Result<DataPtr, E> {
         let capacity = vec.capacity();
-        let guard = Arc::<S>::promote_vec(vec);
+        let guard = Arc::<S>::promote_vec::<E>(vec)?;
         // Release ordering must be used to ensure the arc vtable is visible
         // by `get_metadata`. In case of failure, the read arc is cloned with
         // a fetch-and-add, so there is no need of synchronization.
@@ -94,7 +95,7 @@ impl DataPtr {
                 _ => unsafe { hint::unreachable_unchecked() },
             },
         };
-        Self::new_arc(arc)
+        Ok(Self::new_arc(arc))
     }
 }
 
@@ -167,31 +168,33 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         (DataPtr::new_arc(arc), MaybeUninit::uninit())
     }
 
-    fn data_from_vec<S: Slice + ?Sized>(mut vec: S::Vec) -> Self::Data {
-        if let Some(base) = L::get_base::<S>(&mut vec) {
+    fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
+        mut vec: S::Vec,
+    ) -> Result<Self::Data, S::Vec> {
+        Ok(if let Some(base) = L::get_base::<S>(&mut vec) {
             let capacity = ManuallyDrop::new(vec).capacity();
             (DataPtr::new_capacity(capacity), MaybeUninit::new(base))
         } else {
-            let arc = Arc::<S>::new_vec(vec);
+            let arc = Arc::<S>::new_vec::<E>(vec)?;
             (DataPtr::new_arc(arc), MaybeUninit::uninit())
-        }
+        })
     }
 
-    fn clone<S: Slice + ?Sized>(
+    fn clone<S: Slice + ?Sized, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: &Self::Data,
-    ) -> Self::Data {
+    ) -> Result<Self::Data, E> {
         let (ptr, base) = data;
         let new_ptr = match ptr.get::<S>() {
             Data::Static => DataPtr::new_static(),
             Data::Arc(arc) => DataPtr::new_arc((*arc).clone()),
             Data::Capacity(capacity) => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
-                data.0.promote_vec::<S>(vec)
+                data.0.promote_vec::<S, E>(vec)?
             }
         };
-        (new_ptr, MaybeUninit::uninit())
+        Ok((new_ptr, MaybeUninit::uninit()))
     }
 
     unsafe fn drop<S: Slice + ?Sized, const UNIQUE_HINT: bool>(
@@ -209,14 +212,19 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         }
     }
 
-    fn truncate<S: Slice + ?Sized>(start: NonNull<S::Item>, length: usize, data: &mut Self::Data) {
+    fn truncate<S: Slice + ?Sized, E: AllocErrorImpl>(
+        start: NonNull<S::Item>,
+        length: usize,
+        data: &mut Self::Data,
+    ) -> Result<(), E> {
         let (ptr, base) = data;
         if !Self::TRUNCATABLE || S::needs_drop() {
             if let Data::Capacity(capacity) = ptr.get_mut::<S>() {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
-                *ptr = DataPtr::new_arc(Arc::<S>::new_vec(vec));
+                *ptr = DataPtr::new_arc(Arc::<S>::new_vec::<E>(vec).map_err(E::forget)?);
             }
         }
+        Ok(())
     }
 
     fn is_unique<S: Slice + ?Sized>(data: &Self::Data) -> bool {
@@ -299,24 +307,28 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
             Data::Capacity(capacity) => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
                 let offset = unsafe { vec.offset(start) };
-                let data = Some(unsafe { L2::data_from_vec::<S>(vec, offset) });
+                let data = Some(unsafe { L2::data_from_vec::<S, AllocError>(vec, offset).ok()? });
                 Some((capacity.get() - offset, data))
             }
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L2: ArcSliceLayout>(
+    unsafe fn update_layout<S: Slice + ?Sized, L2: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
-    ) -> L2::Data {
+    ) -> Result<L2::Data, E> {
         let (mut ptr, base) = data;
         match ptr.get_mut::<S>() {
-            Data::Static => L2::data_from_static(unsafe { S::from_raw_parts(start, length) }),
-            Data::Arc(arc) => L2::data_from_arc(ManuallyDrop::into_inner(arc)),
-            Data::Capacity(capacity) => L2::data_from_vec::<S>(unsafe {
+            Data::Static => {
+                L2::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) })
+                    .map_err(E::forget)
+            }
+            Data::Arc(arc) => Ok(L2::data_from_arc(ManuallyDrop::into_inner(arc))),
+            Data::Capacity(capacity) => L2::data_from_vec::<S, E>(unsafe {
                 Self::rebuild_vec::<S>(start, length, capacity, base)
-            }),
+            })
+            .map_err(E::forget),
         }
     }
 }
