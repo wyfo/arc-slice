@@ -189,7 +189,7 @@ const _: () = {
 
     impl<S: Slice<Item = u8> + ?Sized, L: Layout> IntoArcSlice<S> for SmallArcSlice<S, L> {
         fn from_slice(slice: &S) -> Self {
-            SmallArcSlice::new(slice)
+            SmallArcSlice::from_slice(slice)
         }
         fn from_vec(vec: S::Vec) -> Self {
             ArcSlice::<S, L>::from_vec(vec).into()

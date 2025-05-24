@@ -81,6 +81,13 @@ pub struct SmallSlice<S: Slice<Item = u8> + ?Sized, L: Layout = DefaultLayout> {
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
     const MAX_LEN: usize = L::LEN;
 
+    pub const EMPTY: Self = Self {
+        data: L::DEFAULT,
+        offset: 0,
+        tagged_length: INLINED_FLAG,
+        _phantom: PhantomData,
+    };
+
     #[inline]
     pub fn new(slice: &S) -> Option<Self> {
         if slice.len() > Self::MAX_LEN {
@@ -329,17 +336,25 @@ union Inner<S: Slice<Item = u8> + ?Sized, L: Layout> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
+    pub const fn new() -> Self {
+        Self(Inner {
+            small: SmallSlice::EMPTY,
+        })
+    }
+
     #[cfg(feature = "oom-handling")]
     #[inline]
-    pub fn new(slice: &S) -> Self {
-        SmallSlice::new(slice).map_or_else(|| ArcSlice::new(slice).into(), Into::into)
+    pub fn from_slice(slice: &S) -> Self {
+        SmallSlice::new(slice).map_or_else(|| ArcSlice::from_slice(slice).into(), Into::into)
     }
 
     #[cfg(feature = "fallible-allocations")]
     #[inline]
-    pub fn try_new(slice: &S) -> Result<Self, AllocError> {
-        SmallSlice::new(slice)
-            .map_or_else(|| Ok(ArcSlice::try_new(slice)?.into()), |s| Ok(s.into()))
+    pub fn try_from_slice(slice: &S) -> Result<Self, AllocError> {
+        SmallSlice::new(slice).map_or_else(
+            || Ok(ArcSlice::try_from_slice(slice)?.into()),
+            |s| Ok(s.into()),
+        )
     }
 
     #[inline(always)]
@@ -435,18 +450,18 @@ impl<
 
 impl<L: StaticLayout> SmallArcSlice<[u8], L> {
     #[inline]
-    pub const fn new_static(slice: &'static [u8]) -> SmallArcSlice<[u8], L> {
+    pub const fn from_static(slice: &'static [u8]) -> SmallArcSlice<[u8], L> {
         Self(Inner {
-            arc: ManuallyDrop::new(ArcSlice::<[u8], L>::new_static(slice)),
+            arc: ManuallyDrop::new(ArcSlice::<[u8], L>::from_static(slice)),
         })
     }
 }
 
 impl<L: StaticLayout> SmallArcSlice<str, L> {
     #[inline]
-    pub const fn new_static(slice: &'static str) -> SmallArcSlice<str, L> {
+    pub const fn from_static(slice: &'static str) -> SmallArcSlice<str, L> {
         Self(Inner {
-            arc: ManuallyDrop::new(ArcSlice::<str, L>::new_static(slice)),
+            arc: ManuallyDrop::new(ArcSlice::<str, L>::from_static(slice)),
         })
     }
 }
@@ -635,22 +650,6 @@ impl<L: Layout> PartialEq<SmallArcSlice<str, L>> for String {
     }
 }
 
-#[cfg(all(feature = "fallible-allocations", not(feature = "oom-handling")))]
-impl<L: Layout, const N: usize> TryFrom<[u8; N]> for SmallArcSlice<[u8], L> {
-    type Error = [u8; N];
-    fn try_from(value: [u8; N]) -> Result<Self, Self::Error> {
-        SmallSlice::new(&value[..])
-            .map_or_else(|| Ok(ArcSlice::try_from(value)?.into()), |s| Ok(s.into()))
-    }
-}
-
-#[cfg(feature = "oom-handling")]
-impl<L: Layout, const N: usize> From<[u8; N]> for SmallArcSlice<[u8], L> {
-    fn from(value: [u8; N]) -> Self {
-        SmallSlice::new(&value[..]).map_or_else(|| ArcSlice::from(value).into(), Into::into)
-    }
-}
-
 #[cfg(feature = "oom-handling")]
 impl<S: Slice<Item = u8> + ?Sized, L: AnyBufferLayout> From<alloc::boxed::Box<S>>
     for SmallArcSlice<S, L>
@@ -696,6 +695,6 @@ impl<L: Layout> core::str::FromStr for SmallArcSlice<str, L> {
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self::new(s))
+        Ok(Self::from_slice(s))
     }
 }

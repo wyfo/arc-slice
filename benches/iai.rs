@@ -25,7 +25,7 @@ fn arcslice_100_clone() {
 
 #[library_benchmark]
 fn arcslice_subslice_and_split() {
-    let mut bytes = <ArcBytes<ArcLayout<false, true>>>::new_static(b"Hello world");
+    let mut bytes = <ArcBytes<ArcLayout<false, true>>>::from_static(b"Hello world");
     let a = bytes.subslice(0..5);
 
     assert_eq!(a, b"Hello");
@@ -38,7 +38,7 @@ fn arcslice_subslice_and_split() {
 
 #[library_benchmark]
 fn arcslice_subslice_and_split_black_box() {
-    let mut bytes = <ArcBytes<ArcLayout<false, true>>>::new(b"Hello world");
+    let mut bytes = <ArcBytes<ArcLayout<false, true>>>::from_slice(b"Hello world");
     let a = black_box(&bytes).subslice(0..5);
 
     assert_eq!(black_box(&a), b"Hello");

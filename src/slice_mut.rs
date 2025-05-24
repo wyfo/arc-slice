@@ -171,6 +171,16 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
     }
 
     #[inline]
+    pub fn as_slice(&self) -> &S {
+        unsafe { S::from_raw_parts(self.start, self.len()) }
+    }
+
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut S {
+        unsafe { S::from_raw_parts_mut(self.start, self.len()) }
+    }
+
+    #[inline]
     pub const fn capacity(&self) -> usize {
         self.capacity
     }
@@ -452,7 +462,7 @@ impl<
 }
 
 impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
-    pub(crate) fn init(
+    pub(crate) const fn init(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
@@ -468,24 +478,47 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     }
 
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self::init(NonNull::dangling(), 0, 0, None)
     }
 
-    #[cfg(feature = "oom-handling")]
-    pub(crate) fn new_slice(slice: &S) -> Self
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
+    pub(crate) fn from_slice_impl<E: AllocErrorImpl>(slice: &S) -> Result<Self, E>
     where
         S::Item: Copy,
     {
         if slice.is_empty() {
-            return Self::new();
+            return Ok(Self::new());
         }
-        let (arc, start) = Arc::<S, false>::new::<Infallible>(slice).unwrap_checked();
-        Self::init(start, slice.len(), slice.len(), Some(arc.into()))
+        let (arc, start) = Arc::<S, false>::new::<E>(slice)?;
+        Ok(Self::init(
+            start,
+            slice.len(),
+            slice.len(),
+            Some(arc.into()),
+        ))
+    }
+
+    #[cfg(feature = "oom-handling")]
+    #[inline]
+    pub fn from_slice(slice: &S) -> Self
+    where
+        S::Item: Copy,
+    {
+        Self::from_slice_impl::<Infallible>(slice).unwrap_checked()
+    }
+
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_from_slice(slice: &S) -> Result<Self, AllocError>
+    where
+        S::Item: Copy,
+    {
+        Self::from_slice_impl::<AllocError>(slice)
     }
 
     #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
-    pub(crate) fn new_array_impl<E: AllocErrorImpl, const N: usize>(
+    pub(crate) fn from_array_impl<E: AllocErrorImpl, const N: usize>(
         array: [S::Item; N],
     ) -> Result<Self, [S::Item; N]> {
         if N == 0 {
@@ -589,6 +622,20 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     {
         self.reserve(slice.len());
         unsafe { self.extend_from_slice_unchecked(slice.to_slice()) }
+    }
+}
+
+impl<T: Send + Sync + 'static, L: LayoutMut> ArcSliceMut<[T], L> {
+    #[cfg(feature = "oom-handling")]
+    #[inline]
+    pub fn from_array<const N: usize>(array: [T; N]) -> Self {
+        Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
+    }
+
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, [T; N]> {
+        Self::from_array_impl::<AllocError, N>(array)
     }
 }
 
@@ -784,14 +831,14 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> Deref for ArcSliceMut<
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        unsafe { S::from_raw_parts(self.start, self.len()) }
+        self.as_slice()
     }
 }
 
 impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> DerefMut for ArcSliceMut<S, L, UNIQUE> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { S::from_raw_parts_mut(self.start, self.len()) }
+        self.as_mut_slice()
     }
 }
 
@@ -817,7 +864,7 @@ impl<S: Hash + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> Hash
     where
         H: Hasher,
     {
-        self.deref().hash(state);
+        self.as_slice().hash(state);
     }
 }
 
@@ -848,7 +895,7 @@ impl<S: fmt::Debug + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> fmt::Debu
     for ArcSliceMut<S, L, UNIQUE>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_slice(self.deref(), f)
+        debug_slice(self.as_slice(), f)
     }
 }
 
@@ -856,7 +903,7 @@ impl<S: fmt::Display + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> fmt::Di
     for ArcSliceMut<S, L, UNIQUE>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.deref().fmt(f)
+        self.as_slice().fmt(f)
     }
 }
 
@@ -880,7 +927,7 @@ impl<S: PartialEq + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> PartialEq
     for ArcSliceMut<S, L, UNIQUE>
 {
     fn eq(&self, other: &ArcSliceMut<S, L, UNIQUE>) -> bool {
-        self.deref() == other.deref()
+        self.as_slice() == other.as_slice()
     }
 }
 
@@ -893,13 +940,13 @@ impl<S: PartialOrd + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> PartialOr
     for ArcSliceMut<S, L, UNIQUE>
 {
     fn partial_cmp(&self, other: &ArcSliceMut<S, L, UNIQUE>) -> Option<cmp::Ordering> {
-        self.deref().partial_cmp(other.deref())
+        self.as_slice().partial_cmp(other.as_slice())
     }
 }
 
 impl<S: Ord + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> Ord for ArcSliceMut<S, L, UNIQUE> {
     fn cmp(&self, other: &ArcSliceMut<S, L, UNIQUE>) -> cmp::Ordering {
-        self.deref().cmp(other.deref())
+        self.as_slice().cmp(other.as_slice())
     }
 }
 
@@ -907,7 +954,7 @@ impl<S: PartialEq + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> PartialEq<
     for ArcSliceMut<S, L, UNIQUE>
 {
     fn eq(&self, other: &S) -> bool {
-        self.deref() == other
+        self.as_slice() == other
     }
 }
 
@@ -915,7 +962,7 @@ impl<'a, S: PartialEq + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> Partia
     for ArcSliceMut<S, L, UNIQUE>
 {
     fn eq(&self, other: &&'a S) -> bool {
-        self.deref() == *other
+        self.as_slice() == *other
     }
 }
 
@@ -997,7 +1044,7 @@ where
 {
     #[inline]
     fn from(value: &'a S) -> Self {
-        Self::new_slice(value)
+        Self::from_slice(value)
     }
 }
 
@@ -1016,26 +1063,6 @@ impl<T: Send + Sync + 'static> From<Vec<T>> for ArcSliceMut<[T], VecLayout> {
     #[inline]
     fn from(value: Vec<T>) -> Self {
         Self::from_vec(value)
-    }
-}
-
-#[cfg(all(feature = "fallible-allocations", not(feature = "oom-handling")))]
-impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize> TryFrom<[T; N]>
-    for ArcSliceMut<[T], L>
-{
-    type Error = [T; N];
-
-    #[inline]
-    fn try_from(value: [T; N]) -> Result<Self, Self::Error> {
-        Self::new_array_impl::<AllocError, N>(value)
-    }
-}
-
-#[cfg(feature = "oom-handling")]
-impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize> From<[T; N]> for ArcSliceMut<[T], L> {
-    #[inline]
-    fn from(value: [T; N]) -> Self {
-        Self::new_array_impl::<Infallible, N>(value).unwrap_checked()
     }
 }
 

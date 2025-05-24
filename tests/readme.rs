@@ -2,7 +2,7 @@
 fn readme_example() {
     use arc_slice::ArcSlice;
 
-    let mut bytes = <ArcSlice<[u8]>>::new(b"Hello world");
+    let mut bytes = <ArcSlice<[u8]>>::from_slice(b"Hello world");
     let a = bytes.subslice(0..5);
 
     assert_eq!(a, b"Hello");

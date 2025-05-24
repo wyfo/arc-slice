@@ -15,7 +15,7 @@ pub struct Bytes(ArcBytes);
 
 impl Default for Bytes {
     fn default() -> Bytes {
-        Self(ArcBytes::new(&[]))
+        Self(ArcBytes::from_slice(&[]))
     }
 }
 
@@ -25,7 +25,7 @@ impl Bytes {
     }
 
     pub const fn from_static(bytes: &'static [u8]) -> Self {
-        Self(ArcBytes::new_static(bytes))
+        Self(ArcBytes::from_static(bytes))
     }
 
     pub fn from_owner<T>(owner: T) -> Self
@@ -48,7 +48,7 @@ impl Bytes {
     }
 
     pub fn copy_from_slice(data: &[u8]) -> Self {
-        Self(ArcBytes::new(data))
+        Self(ArcBytes::from_slice(data))
     }
 
     pub fn slice(&self, range: impl RangeBounds<usize>) -> Self {

@@ -163,7 +163,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     }
 
     #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
-    fn new_impl<E: AllocErrorImpl>(slice: &S) -> Result<Self, E>
+    fn from_slice_impl<E: AllocErrorImpl>(slice: &S) -> Result<Self, E>
     where
         S::Item: Copy,
     {
@@ -177,23 +177,23 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     #[cfg(feature = "oom-handling")]
     #[inline]
-    pub fn new(slice: &S) -> Self
+    pub fn from_slice(slice: &S) -> Self
     where
         S::Item: Copy,
     {
-        Self::new_impl::<Infallible>(slice).unwrap_checked()
+        Self::from_slice_impl::<Infallible>(slice).unwrap_checked()
     }
 
     #[cfg(feature = "fallible-allocations")]
     #[inline]
-    pub fn try_new(slice: &S) -> Result<Self, AllocError>
+    pub fn try_from_slice(slice: &S) -> Result<Self, AllocError>
     where
         S::Item: Copy,
     {
-        Self::new_impl::<AllocError>(slice)
+        Self::from_slice_impl::<AllocError>(slice)
     }
 
-    fn new_array_impl<E: AllocErrorImpl, const N: usize>(
+    fn from_array_impl<E: AllocErrorImpl, const N: usize>(
         array: [S::Item; N],
     ) -> Result<Self, [S::Item; N]> {
         if let Some(empty) = Self::new_empty(NonNull::dangling(), N) {
@@ -227,7 +227,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     pub(crate) fn from_vec_impl<E: AllocErrorImpl>(mut vec: S::Vec) -> Result<Self, S::Vec> {
         if vec.capacity() == 0 {
-            return Self::new_array_impl::<E, 0>([]).map_err(|_| vec);
+            return Self::from_array_impl::<E, 0>([]).map_err(|_| vec);
         }
         let start = S::vec_start(&mut vec);
         Ok(Self::init(start, vec.len(), L::data_from_vec::<S, E>(vec)?))
@@ -258,11 +258,16 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     }
 
     #[inline]
+    pub fn as_slice(&self) -> &S {
+        unsafe { S::from_raw_parts(self.start, self.length) }
+    }
+
+    #[inline]
     pub fn borrow(&self, range: impl RangeBounds<usize>) -> ArcSliceBorrow<S, L>
     where
         S: Subsliceable,
     {
-        let (offset, len) = range_offset_len(self.deref(), range);
+        let (offset, len) = range_offset_len(self.as_slice(), range);
         unsafe { self.borrow_impl(offset, len) }
     }
 
@@ -271,7 +276,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     where
         S: Subsliceable,
     {
-        let (offset, len) = subslice_offset_len(self.deref(), subset);
+        let (offset, len) = subslice_offset_len(self.as_slice(), subset);
         unsafe { self.borrow_impl(offset, len) }
     }
 
@@ -322,7 +327,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     where
         S: Subsliceable,
     {
-        unsafe { self.subslice_impl::<AllocError>(range_offset_len(self.deref(), range)) }
+        unsafe { self.subslice_impl::<AllocError>(range_offset_len(self.as_slice(), range)) }
     }
 
     #[cfg(feature = "fallible-allocations")]
@@ -331,7 +336,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     where
         S: Subsliceable,
     {
-        unsafe { self.subslice_impl::<AllocError>(subslice_offset_len(self.deref(), subset)) }
+        unsafe { self.subslice_impl::<AllocError>(subslice_offset_len(self.as_slice(), subset)) }
     }
 
     #[inline]
@@ -509,6 +514,20 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     }
 }
 
+impl<T: Send + Sync + 'static, L: Layout> ArcSlice<[T], L> {
+    #[cfg(feature = "oom-handling")]
+    #[inline]
+    pub fn from_array<const N: usize>(array: [T; N]) -> Self {
+        Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
+    }
+
+    #[cfg(feature = "fallible-allocations")]
+    #[inline]
+    pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, [T; N]> {
+        Self::from_array_impl::<AllocError, N>(array)
+    }
+}
+
 impl<
         S: Slice + ?Sized,
         #[cfg(feature = "oom-handling")] L: Layout,
@@ -535,7 +554,7 @@ impl<
     where
         S: Subsliceable,
     {
-        unsafe { self.subslice_impl::<Infallible>(range_offset_len(self.deref(), range)) }
+        unsafe { self.subslice_impl::<Infallible>(range_offset_len(self.as_slice(), range)) }
             .unwrap_checked()
     }
 
@@ -544,7 +563,7 @@ impl<
     where
         S: Subsliceable,
     {
-        unsafe { self.subslice_impl::<Infallible>(subslice_offset_len(self.deref(), subset)) }
+        unsafe { self.subslice_impl::<Infallible>(subslice_offset_len(self.as_slice(), subset)) }
             .unwrap_checked()
     }
 
@@ -718,26 +737,15 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     }
 }
 
-#[cfg(feature = "const-slice")]
-impl<L: Layout> ArcSlice<[u8], L> {
-    #[inline]
-    pub const fn as_slice(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.start.as_ptr(), self.len()) }
-    }
-}
-
-#[cfg(feature = "const-slice")]
-impl<L: Layout> ArcSlice<str, L> {
-    #[inline]
-    pub const fn as_slice(&self) -> &str {
-        let start = self.start.as_ptr();
-        let len = self.len();
-        unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(start, len)) }
+impl<S: Slice + ?Sized, L: StaticLayout> ArcSlice<S, L> {
+    pub const fn new() -> Self {
+        let data = unsafe { L::STATIC_DATA_UNCHECKED.assume_init() };
+        Self::init(NonNull::dangling(), 0, data)
     }
 }
 
 impl<L: StaticLayout> ArcSlice<[u8], L> {
-    pub const fn new_static(slice: &'static [u8]) -> Self {
+    pub const fn from_static(slice: &'static [u8]) -> Self {
         // MSRV 1.65 const `<*const _>::cast_mut` + 1.85 const `NonNull::new`
         let start = unsafe { NonNull::new_unchecked(slice.as_ptr() as _) };
         let length = slice.len();
@@ -747,7 +755,7 @@ impl<L: StaticLayout> ArcSlice<[u8], L> {
 }
 
 impl<L: StaticLayout> ArcSlice<str, L> {
-    pub const fn new_static(slice: &'static str) -> Self {
+    pub const fn from_static(slice: &'static str) -> Self {
         // MSRV 1.65 const `<*const _>::cast_mut` + 1.85 const `NonNull::new`
         let start = unsafe { NonNull::new_unchecked(slice.as_ptr() as _) };
         let length = slice.len();
@@ -780,7 +788,7 @@ impl<S: Slice + ?Sized, L: Layout> Deref for ArcSlice<S, L> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        unsafe { S::from_raw_parts(self.start, self.len()) }
+        self.as_slice()
     }
 }
 
@@ -797,7 +805,7 @@ impl<S: Hash + Slice + ?Sized, L: Layout> Hash for ArcSlice<S, L> {
     where
         H: Hasher,
     {
-        self.deref().hash(state);
+        self.as_slice().hash(state);
     }
 }
 
@@ -820,13 +828,13 @@ where
 
 impl<S: fmt::Debug + Slice + ?Sized, L: Layout> fmt::Debug for ArcSlice<S, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_slice(self.deref(), f)
+        debug_slice(self.as_slice(), f)
     }
 }
 
 impl<S: fmt::Display + Slice + ?Sized, L: Layout> fmt::Display for ArcSlice<S, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.deref().fmt(f)
+        self.as_slice().fmt(f)
     }
 }
 
@@ -844,7 +852,7 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> fmt::UpperHex for ArcSlice<S, L> {
 
 impl<S: PartialEq + Slice + ?Sized, L: Layout> PartialEq for ArcSlice<S, L> {
     fn eq(&self, other: &ArcSlice<S, L>) -> bool {
-        self.deref() == other.deref()
+        self.as_slice() == other.as_slice()
     }
 }
 
@@ -852,25 +860,25 @@ impl<S: PartialEq + Slice + ?Sized, L: Layout> Eq for ArcSlice<S, L> {}
 
 impl<S: PartialOrd + Slice + ?Sized, L: Layout> PartialOrd for ArcSlice<S, L> {
     fn partial_cmp(&self, other: &ArcSlice<S, L>) -> Option<cmp::Ordering> {
-        self.deref().partial_cmp(other.deref())
+        self.as_slice().partial_cmp(other.as_slice())
     }
 }
 
 impl<S: Ord + Slice + ?Sized, L: Layout> Ord for ArcSlice<S, L> {
     fn cmp(&self, other: &ArcSlice<S, L>) -> cmp::Ordering {
-        self.deref().cmp(other.deref())
+        self.as_slice().cmp(other.as_slice())
     }
 }
 
 impl<S: PartialEq + Slice + ?Sized, L: Layout> PartialEq<S> for ArcSlice<S, L> {
     fn eq(&self, other: &S) -> bool {
-        self.deref() == other
+        self.as_slice() == other
     }
 }
 
 impl<'a, S: PartialEq + Slice + ?Sized, L: Layout> PartialEq<&'a S> for ArcSlice<S, L> {
     fn eq(&self, other: &&'a S) -> bool {
-        self.deref() == *other
+        self.as_slice() == *other
     }
 }
 
@@ -941,7 +949,7 @@ where
 {
     #[inline]
     fn from(value: &'a S) -> Self {
-        Self::new(value)
+        Self::from_slice(value)
     }
 }
 
@@ -994,23 +1002,6 @@ impl<L: AnyBufferLayout> From<String> for ArcSlice<str, L> {
     #[inline]
     fn from(value: String) -> Self {
         Self::from_vec(value)
-    }
-}
-
-#[cfg(all(feature = "fallible-allocations", not(feature = "oom-handling")))]
-impl<T: Send + Sync + 'static, L: Layout, const N: usize> TryFrom<[T; N]> for ArcSlice<[T], L> {
-    type Error = [T; N];
-    #[inline]
-    fn try_from(value: [T; N]) -> Result<Self, Self::Error> {
-        Self::new_array_impl::<AllocError, N>(value)
-    }
-}
-
-#[cfg(feature = "oom-handling")]
-impl<T: Send + Sync + 'static, L: Layout, const N: usize> From<[T; N]> for ArcSlice<[T], L> {
-    #[inline]
-    fn from(value: [T; N]) -> Self {
-        Self::new_array_impl::<Infallible, N>(value).unwrap_checked()
     }
 }
 
@@ -1067,7 +1058,7 @@ impl<S: Slice + ?Sized, L: Layout> Deref for ArcSliceBorrow<'_, S, L> {
 
 impl<S: fmt::Debug + Slice + ?Sized, L: Layout> fmt::Debug for ArcSliceBorrow<'_, S, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_slice(self.deref(), f)
+        debug_slice(&**self, f)
     }
 }
 
