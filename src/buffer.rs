@@ -4,7 +4,6 @@ use core::{
     any::Any,
     cmp::max,
     convert::Infallible,
-    marker::PhantomData,
     mem,
     mem::ManuallyDrop,
     ptr,
@@ -60,7 +59,7 @@ pub(crate) trait SliceExt: Slice {
     fn len(&self) -> usize {
         self.to_slice().len()
     }
-    #[cfg(feature = "oom-handling")]
+    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -645,82 +644,6 @@ impl<S: ?Sized, B: AsRef<S> + Send + 'static, const UNIQUE: bool> Buffer<S>
     }
 }
 
-pub trait BufferImpl<B>: Send + 'static {
-    type Slice: ?Sized;
-    type Metadata: Sync + 'static;
-    fn buffer_slice(buffer: &B) -> &Self::Slice;
-    fn buffer_is_unique(_buffer: &B) -> bool {
-        false
-    }
-    fn borrow_metadata(buffer: &B) -> &Self::Metadata;
-}
-
-#[allow(clippy::missing_safety_doc)]
-pub unsafe trait BufferMutImpl<B>: BufferImpl<B> + Sync {
-    fn buffer_slice_mut(buffer: &mut B) -> &mut Self::Slice;
-    fn buffer_capacity(buffer: &B) -> usize;
-    unsafe fn buffer_set_len(buffer: &mut B, len: usize) -> bool;
-    fn buffer_reserve(buffer: &mut B, additional: usize) -> Result<(), TryReserveError>;
-}
-
-#[derive(Debug)]
-pub struct BufferWithImpl<B, I> {
-    pub buffer: B,
-    _phantom: PhantomData<I>,
-}
-
-impl<B: Clone, I> Clone for BufferWithImpl<B, I> {
-    fn clone(&self) -> Self {
-        Self::new(self.buffer.clone())
-    }
-}
-
-impl<B, I> BufferWithImpl<B, I> {
-    pub fn new(buffer: B) -> Self {
-        Self {
-            buffer,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<B: Sync, I: BufferImpl<B> + Sync> BorrowMetadata for BufferWithImpl<B, I> {
-    type Metadata = I::Metadata;
-    fn borrow_metadata(&self) -> &Self::Metadata {
-        I::borrow_metadata(&self.buffer)
-    }
-}
-
-impl<S: ?Sized, B: Send + 'static, I: BufferImpl<B, Slice = S>> Buffer<S> for BufferWithImpl<B, I> {
-    fn as_slice(&self) -> &I::Slice {
-        I::buffer_slice(&self.buffer)
-    }
-
-    fn is_unique(&self) -> bool {
-        I::buffer_is_unique(&self.buffer)
-    }
-}
-
-unsafe impl<S: ?Sized, B: Send + Sync + 'static, I: BufferMutImpl<B, Slice = S>> BufferMut<S>
-    for BufferWithImpl<B, I>
-{
-    fn as_slice_mut(&mut self) -> &mut S {
-        I::buffer_slice_mut(&mut self.buffer)
-    }
-
-    fn capacity(&self) -> usize {
-        I::buffer_capacity(&self.buffer)
-    }
-
-    unsafe fn set_len(&mut self, len: usize) -> bool {
-        unsafe { I::buffer_set_len(&mut self.buffer, len) }
-    }
-
-    fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        I::buffer_reserve(&mut self.buffer, additional)
-    }
-}
-
 #[cfg(any(not(feature = "portable-atomic"), feature = "portable-atomic-util"))]
 const _: () = {
     #[cfg(not(feature = "portable-atomic"))]
@@ -759,19 +682,6 @@ const _: () = {
         #[inline]
         unsafe fn from_raw(ptr: *const ()) -> Self {
             unsafe { Arc::from_raw(ptr.cast()) }
-        }
-    }
-
-    #[cfg(feature = "raw-buffer")]
-    unsafe impl<S: ?Sized, B: Send + Sync + 'static, I: BufferImpl<Arc<B>, Slice = S>> RawBuffer<S>
-        for BufferWithImpl<Arc<B>, I>
-    {
-        fn into_raw(self) -> *const () {
-            Arc::into_raw(self.buffer).cast()
-        }
-
-        unsafe fn from_raw(ptr: *const ()) -> Self {
-            Self::new(unsafe { Arc::from_raw(ptr.cast()) })
         }
     }
 };
