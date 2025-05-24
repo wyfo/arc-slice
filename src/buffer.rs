@@ -300,40 +300,34 @@ unsafe impl Deserializable for str {
 pub trait Buffer<S: ?Sized>: Sized + Send + 'static {
     fn as_slice(&self) -> &S;
 
-    #[inline]
     fn is_unique(&self) -> bool {
         true
     }
 }
 
 impl<S: Slice + ?Sized> Buffer<S> for &'static S {
-    #[inline]
     fn as_slice(&self) -> &S {
         self
     }
 
-    #[inline]
     fn is_unique(&self) -> bool {
         false
     }
 }
 
 impl<S: Slice + ?Sized> Buffer<S> for Box<S> {
-    #[inline]
     fn as_slice(&self) -> &S {
         self
     }
 }
 
 impl<T: Send + Sync + 'static> Buffer<[T]> for Vec<T> {
-    #[inline]
     fn as_slice(&self) -> &[T] {
         self
     }
 }
 
 impl Buffer<str> for String {
-    #[inline]
     fn as_slice(&self) -> &str {
         self
     }
@@ -379,24 +373,20 @@ pub unsafe trait BufferMut<S: ?Sized>: Buffer<S> + Sync {
 }
 
 unsafe impl<T: Send + Sync + 'static> BufferMut<[T]> for Vec<T> {
-    #[inline]
     fn as_slice_mut(&mut self) -> &mut [T] {
         self
     }
 
-    #[inline]
     fn capacity(&self) -> usize {
         self.capacity()
     }
 
-    #[inline]
     unsafe fn set_len(&mut self, len: usize) -> bool {
         // SAFETY: same function contract
         unsafe { self.set_len(len) };
         true
     }
 
-    #[inline]
     fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         let overflow = |len| (len as isize).checked_add(additional as isize).is_none();
         match self.try_reserve(additional) {
@@ -408,24 +398,20 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<[T]> for Vec<T> {
 }
 
 unsafe impl BufferMut<str> for String {
-    #[inline]
     fn as_slice_mut(&mut self) -> &mut str {
         self
     }
 
-    #[inline]
     fn capacity(&self) -> usize {
         self.capacity()
     }
 
-    #[inline]
     unsafe fn set_len(&mut self, len: usize) -> bool {
         // SAFETY: same function contract
         unsafe { self.as_mut_vec().set_len(len) };
         true
     }
 
-    #[inline]
     fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         BufferMut::try_reserve(unsafe { self.as_mut_vec() }, additional)
     }
@@ -569,12 +555,10 @@ impl<B, M> BufferWithMetadata<B, M> {
 impl<S: Slice + ?Sized, B: Buffer<S>, M: Send + Sync + 'static> Buffer<S>
     for BufferWithMetadata<B, M>
 {
-    #[inline]
     fn as_slice(&self) -> &S {
         self.buffer.as_slice()
     }
 
-    #[inline]
     fn is_unique(&self) -> bool {
         self.buffer.is_unique()
     }
@@ -583,22 +567,18 @@ impl<S: Slice + ?Sized, B: Buffer<S>, M: Send + Sync + 'static> Buffer<S>
 unsafe impl<S: Slice + ?Sized, B: BufferMut<S>, M: Send + Sync + 'static> BufferMut<S>
     for BufferWithMetadata<B, M>
 {
-    #[inline]
     fn as_slice_mut(&mut self) -> &mut S {
         self.buffer.as_slice_mut()
     }
 
-    #[inline]
     fn capacity(&self) -> usize {
         self.buffer.capacity()
     }
 
-    #[inline]
     unsafe fn set_len(&mut self, len: usize) -> bool {
         unsafe { self.buffer.set_len(len) }
     }
 
-    #[inline]
     fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError> {
         self.buffer.try_reserve(_additional)
     }
@@ -660,12 +640,10 @@ const _: () = {
     }
 
     impl<S: ?Sized, B: Buffer<S> + Sync> Buffer<S> for Arc<B> {
-        #[inline]
         fn as_slice(&self) -> &S {
             self.as_ref().as_slice()
         }
 
-        #[inline]
         fn is_unique(&self) -> bool {
             // See impl Buffer<T> for Arc<[T]>
             false
@@ -674,12 +652,10 @@ const _: () = {
 
     #[cfg(feature = "raw-buffer")]
     unsafe impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> RawBuffer<T> for Arc<B> {
-        #[inline]
         fn into_raw(self) -> *const () {
             Arc::into_raw(self).cast()
         }
 
-        #[inline]
         unsafe fn from_raw(ptr: *const ()) -> Self {
             unsafe { Arc::from_raw(ptr.cast()) }
         }

@@ -88,7 +88,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         _phantom: PhantomData,
     };
 
-    #[inline]
     pub fn new(slice: &S) -> Option<Self> {
         if slice.len() > Self::MAX_LEN {
             return None;
@@ -109,23 +108,19 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         unsafe { (*addr_of!((*this).tagged_length)) & INLINED_FLAG != 0 }
     }
 
-    #[inline]
     pub const fn len(&self) -> usize {
         (self.tagged_length & !INLINED_FLAG) as usize
     }
 
-    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    #[inline]
     pub const fn as_ptr(&self) -> *const u8 {
         let data = ptr::from_ref(&self.data).cast::<u8>();
         unsafe { data.add(self.offset as usize) }
     }
 
-    #[inline]
     pub fn advance(&mut self, offset: usize)
     where
         S: Subsliceable,
@@ -138,7 +133,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         self.tagged_length -= offset as u8;
     }
 
-    #[inline]
     pub fn truncate(&mut self, len: usize)
     where
         S: Subsliceable,
@@ -149,7 +143,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         }
     }
 
-    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self
     where
         S: Subsliceable,
@@ -164,7 +157,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> Clone for SmallSlice<S, L> {
-    #[inline]
     fn clone(&self) -> Self {
         *self
     }
@@ -175,21 +167,18 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> Copy for SmallSlice<S, L> {}
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> Deref for SmallSlice<S, L> {
     type Target = S;
 
-    #[inline]
     fn deref(&self) -> &Self::Target {
         unsafe { S::from_slice_unchecked(slice::from_raw_parts(self.as_ptr(), self.len())) }
     }
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> AsRef<S> for SmallSlice<S, L> {
-    #[inline]
     fn as_ref(&self) -> &S {
         self
     }
 }
 
 impl<S: Hash + Slice<Item = u8> + ?Sized, L: Layout> Hash for SmallSlice<S, L> {
-    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -199,7 +188,6 @@ impl<S: Hash + Slice<Item = u8> + ?Sized, L: Layout> Hash for SmallSlice<S, L> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> Borrow<S> for SmallSlice<S, L> {
-    #[inline]
     fn borrow(&self) -> &S {
         self
     }
@@ -209,7 +197,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> Default for SmallSlice<S, L>
 where
     for<'a> &'a S: Default,
 {
-    #[inline]
     fn default() -> Self {
         Self::new(Default::default()).unwrap_checked()
     }
@@ -343,13 +330,11 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
     }
 
     #[cfg(feature = "oom-handling")]
-    #[inline]
     pub fn from_slice(slice: &S) -> Self {
         SmallSlice::new(slice).map_or_else(|| ArcSlice::from_slice(slice).into(), Into::into)
     }
 
     #[cfg(feature = "fallible-allocations")]
-    #[inline]
     pub fn try_from_slice(slice: &S) -> Result<Self, AllocError> {
         SmallSlice::new(slice).map_or_else(
             || Ok(ArcSlice::try_from_slice(slice)?.into()),
@@ -385,7 +370,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
-    #[inline]
     pub fn len(&self) -> usize {
         match self.as_either() {
             Either::Left(bytes) => bytes.len(),
@@ -393,12 +377,10 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    #[inline]
     pub fn as_ptr(&self) -> *const u8 {
         match self.as_either() {
             Either::Left(bytes) => bytes.as_ptr(),
@@ -407,7 +389,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
     }
 
     #[cfg(feature = "fallible-allocations")]
-    #[inline]
     pub fn try_subslice(&self, range: impl RangeBounds<usize>) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -436,7 +417,6 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > SmallArcSlice<S, L>
 {
-    #[inline]
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self
     where
         S: Subsliceable,
@@ -449,7 +429,6 @@ impl<
 }
 
 impl<L: StaticLayout> SmallArcSlice<[u8], L> {
-    #[inline]
     pub const fn from_static(slice: &'static [u8]) -> SmallArcSlice<[u8], L> {
         Self(Inner {
             arc: ManuallyDrop::new(ArcSlice::<[u8], L>::from_static(slice)),
@@ -458,7 +437,6 @@ impl<L: StaticLayout> SmallArcSlice<[u8], L> {
 }
 
 impl<L: StaticLayout> SmallArcSlice<str, L> {
-    #[inline]
     pub const fn from_static(slice: &'static str) -> SmallArcSlice<str, L> {
         Self(Inner {
             arc: ManuallyDrop::new(ArcSlice::<str, L>::from_static(slice)),
@@ -467,7 +445,6 @@ impl<L: StaticLayout> SmallArcSlice<str, L> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> Drop for SmallArcSlice<S, L> {
-    #[inline]
     fn drop(&mut self) {
         if let Either::Right(bytes) = self.as_either_mut() {
             unsafe { ptr::drop_in_place(bytes) }
@@ -481,7 +458,6 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > Clone for SmallArcSlice<S, L>
 {
-    #[inline]
     fn clone(&self) -> Self {
         match self.as_either() {
             Either::Left(bytes) => Self(Inner { small: *bytes }),
@@ -495,7 +471,6 @@ impl<
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> Deref for SmallArcSlice<S, L> {
     type Target = S;
 
-    #[inline]
     fn deref(&self) -> &Self::Target {
         match self.as_either() {
             Either::Left(bytes) => bytes,
@@ -505,14 +480,12 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> Deref for SmallArcSlice<S, L> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> AsRef<S> for SmallArcSlice<S, L> {
-    #[inline]
     fn as_ref(&self) -> &S {
         self
     }
 }
 
 impl<S: Hash + Slice<Item = u8> + ?Sized, L: Layout> Hash for SmallArcSlice<S, L> {
-    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -522,7 +495,6 @@ impl<S: Hash + Slice<Item = u8> + ?Sized, L: Layout> Hash for SmallArcSlice<S, L
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> Borrow<S> for SmallArcSlice<S, L> {
-    #[inline]
     fn borrow(&self) -> &S {
         self
     }
@@ -532,7 +504,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> Default for SmallArcSlice<S, L>
 where
     for<'a> &'a S: Default,
 {
-    #[inline]
     fn default() -> Self {
         SmallSlice::default().into()
     }
@@ -674,14 +645,12 @@ impl<L: AnyBufferLayout> From<String> for SmallArcSlice<str, L> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> From<SmallSlice<S, L>> for SmallArcSlice<S, L> {
-    #[inline]
     fn from(value: SmallSlice<S, L>) -> Self {
         Self(Inner { small: value })
     }
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> From<ArcSlice<S, L>> for SmallArcSlice<S, L> {
-    #[inline]
     fn from(value: ArcSlice<S, L>) -> Self {
         Self(Inner {
             arc: ManuallyDrop::new(value),
@@ -693,7 +662,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> From<ArcSlice<S, L>> for SmallArcS
 impl<L: Layout> core::str::FromStr for SmallArcSlice<str, L> {
     type Err = core::convert::Infallible;
 
-    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self::from_slice(s))
     }
