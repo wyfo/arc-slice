@@ -2,7 +2,7 @@
 name = "arc-slice"
 version = "0.1.0-alpha.2"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.64.0"
 exclude = [".*"]
 description = "Shared memory slices"
 homepage = "https://github.com/wyfo/arc-slice"
@@ -20,11 +20,10 @@ license = "MIT"
 repository = "https://github.com/wyfo/arc-slice"
 
 [features]
-default = ["abort-on-refcount-overflow", "const-slice", "oom-handling", "std"]
+default = ["abort-on-refcount-overflow", "oom-handling", "std"]
 abort-on-refcount-overflow = []
 bstr = ["dep:bstr"]
 bytes = ["dep:bytes"]
-const-slice = []
 fallible-allocations = []
 inlined = ["dep:either"]
 oom-handling = []

@@ -82,11 +82,7 @@ impl DataPtr {
         let arc = match self.0.compare_exchange(
             Self::capacity_as_ptr(capacity),
             guard.as_ptr(),
-            if cfg!(feature = "const-slice") {
-                Ordering::Release
-            } else {
-                Ordering::AcqRel
-            },
+            Ordering::Release,
             Ordering::Acquire,
         ) {
             Ok(_) => guard.into(),
