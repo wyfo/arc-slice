@@ -900,6 +900,15 @@ where
     }
 }
 
+#[cfg(feature = "oom-handling")]
+impl<'a, T: Copy + Send + Sync + 'static, L: Layout, const N: usize> From<&'a [T; N]>
+    for ArcSlice<[T], L>
+{
+    fn from(value: &'a [T; N]) -> Self {
+        Self::from_slice(value)
+    }
+}
+
 #[cfg(not(feature = "oom-handling"))]
 impl<S: Slice + ?Sized> From<Box<S>> for ArcSlice<S, BoxedSliceLayout> {
     fn from(value: Box<S>) -> Self {
