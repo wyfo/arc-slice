@@ -27,7 +27,6 @@ use crate::{
     utils::try_transmute,
 };
 
-// default must be empty if implemented
 // `into_vec` must not have any side effect
 #[allow(clippy::missing_safety_doc)]
 pub unsafe trait Slice: Send + Sync + 'static {
@@ -85,6 +84,9 @@ pub(crate) trait SliceExt: Slice {
 }
 
 impl<S: Slice + ?Sized> SliceExt for S {}
+
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait Emptyable: Slice {}
 
 #[allow(clippy::missing_safety_doc)]
 pub unsafe trait Zeroable: Slice {}
@@ -164,6 +166,9 @@ unsafe impl<T: Send + Sync + 'static> Slice for [T] {
         Ok(slice)
     }
 }
+
+unsafe impl<T: Send + Sync + 'static> Emptyable for [T] {}
+unsafe impl Emptyable for str {}
 
 #[cfg(feature = "bytemuck")]
 unsafe impl<T: bytemuck::Zeroable + Send + Sync + 'static> Zeroable for [T] {}

@@ -26,8 +26,8 @@ use crate::utils::assert_checked;
 use crate::{
     arc::Arc,
     buffer::{
-        BorrowMetadata, Buffer, BufferExt, BufferMut, BufferWithMetadata, DynBuffer, Slice,
-        SliceExt, Subsliceable,
+        BorrowMetadata, Buffer, BufferExt, BufferMut, BufferWithMetadata, DynBuffer, Emptyable,
+        Slice, SliceExt, Subsliceable,
     },
     error::{AllocError, AllocErrorImpl},
     layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, LayoutMut, StaticLayout},
@@ -161,6 +161,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     pub const fn new() -> Self
     where
+        S: Emptyable,
         L: StaticLayout,
     {
         let data = unsafe { L::STATIC_DATA_UNCHECKED.assume_init() };
@@ -751,10 +752,7 @@ impl<S: Slice + ?Sized, L: Layout> Borrow<S> for ArcSlice<S, L> {
     }
 }
 
-impl<S: Slice + ?Sized, L: StaticLayout> Default for ArcSlice<S, L>
-where
-    for<'a> &'a S: Default,
-{
+impl<S: Emptyable + ?Sized, L: StaticLayout> Default for ArcSlice<S, L> {
     fn default() -> Self {
         Self::new_empty(NonNull::dangling(), 0).unwrap_checked()
     }

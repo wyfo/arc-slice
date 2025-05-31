@@ -22,7 +22,7 @@ use crate::{
     arc::Arc,
     buffer::{
         BorrowMetadata, BufferExt, BufferMut, BufferWithMetadata, Concatenable, DynBuffer,
-        Extendable, Slice, SliceExt, Zeroable,
+        Emptyable, Extendable, Slice, SliceExt, Zeroable,
     },
     error::{AllocError, AllocErrorImpl, TryReserveError},
     layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, Layout, LayoutMut},
@@ -448,8 +448,18 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         }
     }
 
-    pub const fn new() -> Self {
+    /// # Safety
+    ///
+    /// Empty slice must be valid (see [`Emptyable`])
+    const unsafe fn empty() -> Self {
         Self::init(NonNull::dangling(), 0, 0, None)
+    }
+
+    pub const fn new() -> Self
+    where
+        S: Emptyable,
+    {
+        unsafe { Self::empty() }
     }
 
     pub(crate) fn from_slice_impl<E: AllocErrorImpl>(slice: &S) -> Result<Self, E>
@@ -457,7 +467,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         S::Item: Copy,
     {
         if slice.is_empty() {
-            return Ok(Self::new());
+            return Ok(unsafe { Self::empty() });
         }
         let (arc, start) = Arc::<S, false>::new::<E>(slice)?;
         Ok(Self::init(
@@ -483,16 +493,6 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::from_slice_impl::<AllocError>(slice)
     }
 
-    pub(crate) fn from_array_impl<E: AllocErrorImpl, const N: usize>(
-        array: [S::Item; N],
-    ) -> Result<Self, [S::Item; N]> {
-        if N == 0 {
-            return Ok(Self::new());
-        }
-        let (arc, start) = Arc::<S, false>::new_array::<E, N>(array)?;
-        Ok(Self::init(start, N, N, Some(arc.into())))
-    }
-
     #[cfg(feature = "serde")]
     pub(crate) fn new_bytes(slice: &S) -> Self {
         assert_checked(is!(S::Item, u8));
@@ -514,7 +514,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     pub(crate) fn from_vec_impl<E: AllocErrorImpl>(mut vec: S::Vec) -> Result<Self, S::Vec> {
         let capacity = vec.capacity();
         if capacity == 0 {
-            return Ok(Self::new());
+            return Ok(unsafe { Self::empty() });
         }
         let start = S::vec_start(&mut vec);
         let length = vec.len();
@@ -530,7 +530,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         capacity: usize,
     ) -> Result<Self, E> {
         if capacity == 0 {
-            return Ok(Self::new());
+            return Ok(unsafe { Self::empty() });
         }
         let (arc, start) = Arc::<S>::with_capacity::<E, ZEROED>(capacity)?;
         let length = if ZEROED { capacity } else { 0 };
@@ -538,11 +538,17 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     }
 
     #[cfg(feature = "oom-handling")]
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self
+    where
+        S: Emptyable,
+    {
         Self::with_capacity_impl::<Infallible, false>(capacity).unwrap_checked()
     }
 
-    pub fn try_with_capacity(capacity: usize) -> Result<Self, AllocError> {
+    pub fn try_with_capacity(capacity: usize) -> Result<Self, AllocError>
+    where
+        S: Emptyable,
+    {
         Self::with_capacity_impl::<AllocError, false>(capacity)
     }
 
@@ -589,6 +595,16 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
 }
 
 impl<T: Send + Sync + 'static, L: LayoutMut> ArcSliceMut<[T], L> {
+    pub(crate) fn from_array_impl<E: AllocErrorImpl, const N: usize>(
+        array: [T; N],
+    ) -> Result<Self, [T; N]> {
+        if N == 0 {
+            return Ok(Self::new());
+        }
+        let (arc, start) = Arc::<[T], false>::new_array::<E, N>(array)?;
+        Ok(Self::init(start, N, N, Some(arc.into())))
+    }
+
     #[cfg(feature = "oom-handling")]
     pub fn from_array<const N: usize>(array: [T; N]) -> Self {
         Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
@@ -820,7 +836,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> BorrowMut<S>
     }
 }
 
-impl<S: Slice + ?Sized, L: LayoutMut> Default for ArcSliceMut<S, L> {
+impl<S: Emptyable + ?Sized, L: LayoutMut> Default for ArcSliceMut<S, L> {
     fn default() -> Self {
         Self::new()
     }
@@ -1015,7 +1031,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize, const UNIQUE: bool>
     }
 }
 
-impl<S: Slice + Extendable + ?Sized, L: LayoutMut, const UNIQUE: bool> Extend<S::Item>
+impl<S: Emptyable + Extendable + ?Sized, L: LayoutMut, const UNIQUE: bool> Extend<S::Item>
     for ArcSliceMut<S, L, UNIQUE>
 {
     fn extend<I: IntoIterator<Item = S::Item>>(&mut self, iter: I) {
@@ -1027,7 +1043,7 @@ impl<S: Slice + Extendable + ?Sized, L: LayoutMut, const UNIQUE: bool> Extend<S:
     }
 }
 
-impl<S: Slice + Extendable + ?Sized, L: LayoutMut> FromIterator<S::Item> for ArcSliceMut<S, L> {
+impl<S: Emptyable + Extendable + ?Sized, L: LayoutMut> FromIterator<S::Item> for ArcSliceMut<S, L> {
     fn from_iter<T: IntoIterator<Item = S::Item>>(iter: T) -> Self {
         let mut this = Self::new();
         let iter = iter.into_iter();

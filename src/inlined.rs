@@ -17,13 +17,11 @@ use crate::layout::AnyBufferLayout;
 #[cfg(not(feature = "oom-handling"))]
 use crate::layout::CloneNoAllocLayout;
 use crate::{
-    buffer::{Slice, SliceExt, Subsliceable},
+    buffer::{Emptyable, Slice, SliceExt, Subsliceable},
     error::AllocError,
     layout::{ArcLayout, BoxedSliceLayout, DefaultLayout, Layout, StaticLayout, VecLayout},
     msrv::ptr,
-    utils::{
-        debug_slice, lower_hex, panic_out_of_range, range_offset_len, upper_hex, UnwrapChecked,
-    },
+    utils::{debug_slice, lower_hex, panic_out_of_range, range_offset_len, upper_hex},
     ArcSlice,
 };
 
@@ -33,7 +31,7 @@ const INLINED_FLAG: u8 = 0x80;
 pub unsafe trait InlinedLayout {
     const LEN: usize;
     type Data: Copy;
-    const DEFAULT: Self::Data;
+    const UNINIT: Self::Data;
 }
 
 const _3_WORDS_LEN: usize = 3 * size_of::<usize>() - 2;
@@ -44,26 +42,26 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> InlinedLayout
 {
     const LEN: usize = _3_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _3_WORDS_LEN];
-    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
+    const UNINIT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
 }
 
 unsafe impl InlinedLayout for BoxedSliceLayout {
     const LEN: usize = _3_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _3_WORDS_LEN];
-    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
+    const UNINIT: Self::Data = [MaybeUninit::uninit(); _3_WORDS_LEN];
 }
 
 unsafe impl InlinedLayout for VecLayout {
     const LEN: usize = _4_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _4_WORDS_LEN];
-    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
+    const UNINIT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
 }
 
 #[cfg(feature = "raw-buffer")]
 unsafe impl InlinedLayout for crate::layout::RawLayout {
     const LEN: usize = _4_WORDS_LEN;
     type Data = [MaybeUninit<u8>; _4_WORDS_LEN];
-    const DEFAULT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
+    const UNINIT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
 }
 
 #[repr(C)]
@@ -81,7 +79,7 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
     const MAX_LEN: usize = L::LEN;
 
     pub const EMPTY: Self = Self {
-        data: L::DEFAULT,
+        data: L::UNINIT,
         offset: 0,
         tagged_length: INLINED_FLAG,
         _phantom: PhantomData,
@@ -92,7 +90,7 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
             return None;
         }
         let mut this = Self {
-            data: L::DEFAULT,
+            data: L::UNINIT,
             offset: 0,
             tagged_length: slice.len() as u8 | INLINED_FLAG,
             _phantom: PhantomData,
@@ -192,12 +190,9 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> Borrow<S> for SmallSlice<S, L> {
     }
 }
 
-impl<S: Slice<Item = u8> + ?Sized, L: Layout> Default for SmallSlice<S, L>
-where
-    for<'a> &'a S: Default,
-{
+impl<S: Emptyable<Item = u8> + ?Sized, L: Layout> Default for SmallSlice<S, L> {
     fn default() -> Self {
-        Self::new(Default::default()).unwrap_checked()
+        Self::EMPTY
     }
 }
 
@@ -497,12 +492,9 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> Borrow<S> for SmallArcSlice<S, L> 
     }
 }
 
-impl<S: Slice<Item = u8> + ?Sized, L: Layout> Default for SmallArcSlice<S, L>
-where
-    for<'a> &'a S: Default,
-{
+impl<S: Emptyable<Item = u8> + ?Sized, L: Layout> Default for SmallArcSlice<S, L> {
     fn default() -> Self {
-        SmallSlice::default().into()
+        Self::from(SmallSlice::default())
     }
 }
 
