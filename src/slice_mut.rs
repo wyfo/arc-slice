@@ -25,7 +25,7 @@ use crate::{
         Emptyable, Extendable, Slice, SliceExt, Zeroable,
     },
     error::{AllocError, AllocErrorImpl, TryReserveError},
-    layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, Layout, LayoutMut},
+    layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, LayoutMut},
     macros::{assume, is},
     msrv::{ptr, NonZero},
     slice::ArcSliceLayout,
@@ -336,9 +336,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         unsafe { mem::transmute::<Self, ArcSliceMut<S, L, false>>(self) }
     }
 
-    fn freeze_impl<L2: Layout + FromLayout<L>, E: AllocErrorImpl>(
-        self,
-    ) -> Result<ArcSlice<S, L2>, Self> {
+    fn freeze_impl<L2: FromLayout<L>, E: AllocErrorImpl>(self) -> Result<ArcSlice<S, L2>, Self> {
         let this = ManuallyDrop::new(self);
         let data = match this.data {
             Some(data) => L::frozen_data::<S, L2, E>(this.start, this.length, this.capacity, data),
@@ -353,7 +351,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         }
     }
 
-    pub fn try_freeze<L2: Layout + FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
+    pub fn try_freeze<L2: FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.freeze_impl::<L2, AllocError>()
     }
 
@@ -423,7 +421,7 @@ impl<
         const UNIQUE: bool,
     > ArcSliceMut<S, L, UNIQUE>
 {
-    pub fn freeze<L2: Layout + FromLayout<L>>(self) -> ArcSlice<S, L2> {
+    pub fn freeze<L2: FromLayout<L>>(self) -> ArcSlice<S, L2> {
         self.freeze_impl::<L2, Infallible>().unwrap_checked()
     }
 

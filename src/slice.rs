@@ -436,7 +436,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
             .ok_or_else(|| ManuallyDrop::into_inner(this))
     }
 
-    fn with_layout_impl<L2: Layout + FromLayout<L>, E: AllocErrorImpl>(
+    fn with_layout_impl<L2: FromLayout<L>, E: AllocErrorImpl>(
         self,
     ) -> Result<ArcSlice<S, L2>, Self> {
         let mut this = ManuallyDrop::new(self);
@@ -447,7 +447,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
-    pub fn try_with_layout<L2: Layout + FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
+    pub fn try_with_layout<L2: FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.with_layout_impl::<L2, AllocError>()
     }
 
@@ -550,7 +550,7 @@ impl<
         self.split_to_impl::<Infallible>(at).unwrap_checked()
     }
 
-    pub fn with_layout<L2: Layout + FromLayout<L>>(self) -> ArcSlice<S, L2> {
+    pub fn with_layout<L2: FromLayout<L>>(self) -> ArcSlice<S, L2> {
         self.with_layout_impl::<L2, Infallible>().unwrap_checked()
     }
 }
@@ -715,7 +715,7 @@ impl<S: Slice + ?Sized, L: Layout> Drop for ArcSlice<S, L> {
 impl<
         S: Slice + ?Sized,
         #[cfg(feature = "oom-handling")] L: Layout,
-        #[cfg(not(feature = "oom-handling"))] L: Layout + CloneNoAllocLayout,
+        #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > Clone for ArcSlice<S, L>
 {
     fn clone(&self) -> Self {

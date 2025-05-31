@@ -84,7 +84,7 @@ pub(crate) fn upper_hex(slice: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result
     Ok(())
 }
 
-pub(crate) fn range_offset_len<S: Slice + Subsliceable + ?Sized>(
+pub(crate) fn range_offset_len<S: Subsliceable + ?Sized>(
     slice: &S,
     range: impl RangeBounds<usize>,
 ) -> (usize, usize) {
@@ -108,7 +108,7 @@ pub(crate) fn range_offset_len<S: Slice + Subsliceable + ?Sized>(
     (offset, len)
 }
 
-pub(crate) fn subslice_offset_len<S: Slice + Subsliceable + ?Sized>(
+pub(crate) fn subslice_offset_len<S: Subsliceable + ?Sized>(
     slice: &S,
     subslice: &S,
 ) -> (usize, usize) {
