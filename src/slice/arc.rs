@@ -51,6 +51,19 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         Some(arc.into_raw())
     }
 
+    fn try_data_from_arc<S: Slice + ?Sized, const ANY_BUFFER2: bool>(
+        arc: ManuallyDrop<Arc<S, ANY_BUFFER2>>,
+    ) -> Option<Self::Data> {
+        if ANY_BUFFER {
+            return Some(Self::data_from_arc(ManuallyDrop::into_inner(arc)));
+        }
+        let arc = ManuallyDrop::into_inner(arc)
+            .try_into_arc_slice()
+            .map_err(mem::forget)
+            .ok()?;
+        Some(Self::data_from_arc(arc))
+    }
+
     fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
         slice: &'static S,
     ) -> Result<Self::Data, &'static S> {
@@ -145,15 +158,15 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
+    fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
-    ) -> Result<L::Data, E> {
+    ) -> Option<L::Data> {
         match Self::arc::<S>(&data) {
-            Some(arc) => Ok(L::data_from_arc(ManuallyDrop::into_inner(arc))),
-            None => L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) })
-                .map_err(E::forget),
+            Some(arc) => L::try_data_from_arc(arc),
+            _ if !L::ANY_BUFFER => None,
+            None => L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) }).ok(),
         }
     }
 }

@@ -533,6 +533,13 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         }
     }
 
+    pub(crate) fn try_into_arc_slice(self) -> Result<Arc<S, false>, Self> {
+        match self.vtable_or_capacity() {
+            VTableOrCapacity::VTable(_) => Err(self),
+            VTableOrCapacity::Capacity(_) => Ok(unsafe { Arc::from_raw(self.into_raw()) }),
+        }
+    }
+
     #[cfg(feature = "raw-buffer")]
     pub(crate) fn vtable(&self) -> Option<&'static VTable> {
         match self.vtable_or_capacity() {

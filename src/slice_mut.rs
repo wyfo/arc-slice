@@ -72,6 +72,12 @@ pub(crate) type TryReserveResult<T> = (Result<usize, TryReserveError>, NonNull<T
 
 #[allow(clippy::missing_safety_doc)]
 pub unsafe trait ArcSliceMutLayout {
+    const ANY_BUFFER: bool = true;
+    fn try_data_from_arc<S: Slice + ?Sized, const ANY_BUFFER: bool>(
+        arc: ManuallyDrop<Arc<S, ANY_BUFFER>>,
+    ) -> Option<Data> {
+        Some(ManuallyDrop::into_inner(arc).into())
+    }
     unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
         offset: usize,
@@ -123,15 +129,12 @@ pub unsafe trait ArcSliceMutLayout {
         capacity: usize,
         data: Data,
     ) -> Result<L::Data, E>;
-    // unsafe because we must unsure `L: FromLayout<Self>`
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
-        _start: NonNull<S::Item>,
-        _length: usize,
-        _capacity: usize,
+    fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
+        start: NonNull<S::Item>,
+        length: usize,
+        capacity: usize,
         data: Data,
-    ) -> Result<Data, E> {
-        Ok(data)
-    }
+    ) -> Option<Data>;
 }
 
 pub struct ArcSliceMut<
@@ -355,7 +358,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         self.freeze_impl::<L2, AllocError>()
     }
 
-    fn with_layout_impl<L2: LayoutMut + FromLayout<L>, E: AllocErrorImpl>(
+    fn with_layout_impl<L2: LayoutMut, E: AllocErrorImpl>(
         self,
     ) -> Result<ArcSliceMut<S, L2, UNIQUE>, Self> {
         let this = ManuallyDrop::new(self);
@@ -366,16 +369,14 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
             capacity: this.capacity,
             data: this
                 .data
-                .map(|data| unsafe { update_layout(this.start, this.length, this.capacity, data) })
+                .map(|data| update_layout(this.start, this.length, this.capacity, data).ok_or(()))
                 .transpose()
                 .map_err(|_| ManuallyDrop::into_inner(this))?,
             _phantom: PhantomData,
         })
     }
 
-    pub fn try_with_layout<L2: LayoutMut + FromLayout<L>>(
-        self,
-    ) -> Result<ArcSliceMut<S, L2, UNIQUE>, Self> {
+    pub fn try_with_layout<L2: LayoutMut>(self) -> Result<ArcSliceMut<S, L2, UNIQUE>, Self> {
         self.with_layout_impl::<L2, AllocError>()
     }
 
@@ -513,7 +514,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     #[cfg(feature = "serde")]
     pub(crate) fn new_byte_vec(vec: S::Vec) -> Self {
         assert_checked(is!(S::Item, u8));
-        if !L::ANY_BUFFER {
+        if !<L as ArcSliceMutLayout>::ANY_BUFFER {
             return Self::new_bytes(ManuallyDrop::new(vec).as_slice());
         }
         Self::from_vec(vec)

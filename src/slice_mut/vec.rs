@@ -220,18 +220,21 @@ unsafe impl ArcSliceMutLayout for VecLayout {
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
+    fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         capacity: usize,
         data: Data,
-    ) -> Result<Data, E> {
+    ) -> Option<Data> {
         match Self::offset_or_arc::<S>(data) {
+            OffsetOrArc::Arc(arc) => L::try_data_from_arc(arc),
+            _ if !L::ANY_BUFFER => None,
             OffsetOrArc::Offset(offset) => unsafe {
                 let vec = Self::rebuild_vec::<S>(start, length, capacity, offset);
-                L::data_from_vec::<S, E>(vec, offset).map_err(E::forget)
+                L::data_from_vec::<S, E>(vec, offset)
+                    .map_err(mem::forget)
+                    .ok()
             },
-            _ => Ok(data),
         }
     }
 }

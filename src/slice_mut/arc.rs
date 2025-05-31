@@ -13,6 +13,16 @@ use crate::{
 unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceMutLayout
     for ArcLayout<ANY_BUFFER, STATIC>
 {
+    const ANY_BUFFER: bool = ANY_BUFFER;
+    fn try_data_from_arc<S: Slice + ?Sized, const ANY_BUFFER2: bool>(
+        arc: ManuallyDrop<Arc<S, ANY_BUFFER2>>,
+    ) -> Option<Data> {
+        ManuallyDrop::into_inner(arc)
+            .try_into_arc_slice()
+            .map_err(mem::forget)
+            .ok()
+            .map(Into::into)
+    }
     unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
         _offset: usize,
@@ -99,5 +109,14 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceMutLayout
         Ok(L::data_from_arc(ManuallyDrop::into_inner(
             data.into_arc::<S, ANY_BUFFER>(),
         )))
+    }
+
+    fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
+        _start: NonNull<S::Item>,
+        _length: usize,
+        _capacity: usize,
+        data: Data,
+    ) -> Option<Data> {
+        L::try_data_from_arc(data.into_arc::<S, ANY_BUFFER>())
     }
 }

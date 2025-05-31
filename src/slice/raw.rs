@@ -328,23 +328,25 @@ unsafe impl ArcSliceLayout for RawLayout {
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
+    fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
-    ) -> Result<L::Data, E> {
+    ) -> Option<L::Data> {
         let res = match arc_or_vtable::<S>(data) {
-            ArcOrVTable::Arc(arc) => return Ok(L::data_from_arc(ManuallyDrop::into_inner(arc))),
+            ArcOrVTable::Arc(arc) => return L::try_data_from_arc(arc),
+            _ if !L::ANY_BUFFER => return None,
             ArcOrVTable::Vtable { ptr, vtable } if E::FALLIBLE => unsafe {
                 (vtable.into_arc_fallible)(ptr)
             },
             ArcOrVTable::Vtable { ptr, vtable } => Ok(unsafe { (vtable.into_arc)(ptr) }),
         };
         match res {
-            Ok(Some(arc)) => Ok(L::data_from_arc(unsafe { Arc::<S>::from_raw(arc) })),
-            Ok(None) => L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) })
-                .map_err(E::forget),
-            Err(_) => Err(E::new()),
+            Ok(Some(arc)) => Some(L::data_from_arc(unsafe { Arc::<S>::from_raw(arc) })),
+            Ok(None) => {
+                L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) }).ok()
+            }
+            Err(_) => None,
         }
     }
 }

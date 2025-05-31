@@ -309,22 +309,23 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         }
     }
 
-    unsafe fn update_layout<S: Slice + ?Sized, L2: ArcSliceLayout, E: AllocErrorImpl>(
+    fn update_layout<S: Slice + ?Sized, L2: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
-    ) -> Result<L2::Data, E> {
+    ) -> Option<L2::Data> {
         let (mut ptr, base) = data;
         match ptr.get_mut::<S>() {
+            Data::Arc(arc) => L2::try_data_from_arc(arc),
+            _ if !L2::ANY_BUFFER => None,
             Data::Static => {
-                L2::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) })
-                    .map_err(E::forget)
+                L2::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) }).ok()
             }
-            Data::Arc(arc) => Ok(L2::data_from_arc(ManuallyDrop::into_inner(arc))),
             Data::Capacity(capacity) => L2::data_from_vec::<S, E>(unsafe {
                 Self::rebuild_vec::<S>(start, length, capacity, base)
             })
-            .map_err(E::forget),
+            .map_err(mem::forget)
+            .ok(),
         }
     }
 }

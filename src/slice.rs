@@ -51,9 +51,9 @@ mod vec;
 pub unsafe trait ArcSliceLayout: 'static {
     type Data;
     const ANY_BUFFER: bool = true;
-    const STATIC_DATA: Option<Self::Data> = None;
+    const STATIC_DATA: Option<Self::Data>;
     // MSRV 1.83 const `Option::unwrap`
-    const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::uninit();
+    const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data>;
     fn data_from_arc<S: Slice + ?Sized, const ANY_BUFFER: bool>(
         arc: Arc<S, ANY_BUFFER>,
     ) -> Self::Data;
@@ -64,6 +64,11 @@ pub unsafe trait ArcSliceLayout: 'static {
         arc: Arc<S, ANY_BUFFER>,
     ) -> Self::Data {
         Self::data_from_arc(arc)
+    }
+    fn try_data_from_arc<S: Slice + ?Sized, const ANY_BUFFER: bool>(
+        arc: ManuallyDrop<Arc<S, ANY_BUFFER>>,
+    ) -> Option<Self::Data> {
+        Some(Self::data_from_arc(ManuallyDrop::into_inner(arc)))
     }
     fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
         _slice: &'static S,
@@ -119,12 +124,11 @@ pub unsafe trait ArcSliceLayout: 'static {
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
     ) -> Option<(usize, Option<Data>)>;
-    // unsafe because we must unsure `L: FromLayout<Self>`
-    unsafe fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
+    fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
         data: Self::Data,
-    ) -> Result<L::Data, E>;
+    ) -> Option<L::Data>;
 }
 
 #[cfg(not(feature = "inlined"))]
@@ -438,18 +442,16 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
             .ok_or_else(|| ManuallyDrop::into_inner(this))
     }
 
-    fn with_layout_impl<L2: FromLayout<L>, E: AllocErrorImpl>(
-        self,
-    ) -> Result<ArcSlice<S, L2>, Self> {
+    fn with_layout_impl<L2: Layout, E: AllocErrorImpl>(self) -> Result<ArcSlice<S, L2>, Self> {
         let mut this = ManuallyDrop::new(self);
         let data = unsafe { ManuallyDrop::take(&mut this.data) };
-        match unsafe { L::update_layout::<S, L2, E>(this.start, this.length, data) } {
-            Ok(data) => Ok(ArcSlice::init(this.start, this.len(), data)),
-            Err(_) => Err(ManuallyDrop::into_inner(this)),
+        match L::update_layout::<S, L2, E>(this.start, this.length, data) {
+            Some(data) => Ok(ArcSlice::init(this.start, this.len(), data)),
+            None => Err(ManuallyDrop::into_inner(this)),
         }
     }
 
-    pub fn try_with_layout<L2: FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
+    pub fn try_with_layout<L2: Layout>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.with_layout_impl::<L2, AllocError>()
     }
 
