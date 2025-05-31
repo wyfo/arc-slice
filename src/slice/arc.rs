@@ -38,7 +38,11 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
 
     const ANY_BUFFER: bool = ANY_BUFFER;
     const STATIC_DATA: Option<Self::Data> = if STATIC { Some(None) } else { None };
-    const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = MaybeUninit::new(None);
+    const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = if STATIC {
+        MaybeUninit::new(None)
+    } else {
+        MaybeUninit::uninit()
+    };
 
     fn data_from_arc<S: Slice + ?Sized, const ANY_BUFFER2: bool>(
         arc: Arc<S, ANY_BUFFER2>,
