@@ -224,15 +224,11 @@ pub(crate) mod vtable {
     use crate::msrv::ConstPtrExt;
     use crate::{
         arc::{ArcInner, CompactVec},
-        buffer::{Buffer, BufferExt, DynBuffer, Slice, SliceExt},
-        macros::{is, is_not},
-        vtable::{no_capacity, VTable},
-    };
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
-    use crate::{
-        buffer::{BufferMut, BufferMutExt},
+        buffer::{Buffer, BufferExt, BufferMut, BufferMutExt, DynBuffer, Slice, SliceExt},
         error::TryReserveError,
+        macros::{is, is_not},
         slice_mut::TryReserveResult,
+        vtable::{no_capacity, VTable},
     };
 
     unsafe fn deallocate<B>(ptr: *mut ()) {
@@ -273,7 +269,6 @@ pub(crate) mod vtable {
         Some(buffer)
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     unsafe fn capacity<S: Slice + ?Sized, B: BufferMut<S>>(
         ptr: *const (),
         start: NonNull<()>,
@@ -285,7 +280,6 @@ pub(crate) mod vtable {
         buffer.capacity() - unsafe { buffer.offset(start.cast()) }
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     #[allow(unstable_name_collisions)]
     unsafe fn try_reserve<S: Slice + ?Sized, B: BufferMut<S>>(
         ptr: NonNull<()>,
@@ -361,7 +355,6 @@ pub(crate) mod vtable {
         }
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn new_mut<S: ?Sized + Slice, B: DynBuffer + BufferMut<S>>() -> &'static VTable {
         &VTable {
             deallocate: deallocate::<B>,
@@ -497,7 +490,6 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         Ok((arc, start))
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn new<E: AllocErrorImpl>(slice: &S) -> Result<(Self, NonNull<S::Item>), E>
     where
         S::Item: Copy,
@@ -801,7 +793,6 @@ impl<S: Slice + ?Sized> Arc<S> {
         Ok((arc.into(), start, length))
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     #[allow(clippy::type_complexity)]
     pub(crate) fn new_buffer_mut<B: DynBuffer + BufferMut<S>, E: AllocErrorImpl>(
         buffer: B,
@@ -858,7 +849,6 @@ impl<B> ArcGuard<B> {
         &unsafe { self.0.as_ref() }.buffer
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn buffer_mut(&mut self) -> &mut B {
         &mut unsafe { self.0.as_mut() }.buffer
     }

@@ -52,21 +52,18 @@ pub(crate) trait SliceExt: Slice {
     fn as_ptr(&self) -> NonNull<Self::Item> {
         NonNull::new_checked(self.to_slice().as_ptr().cast_mut())
     }
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn as_mut_ptr(&mut self) -> NonNull<Self::Item> {
         NonNull::new_checked(unsafe { self.to_slice_mut().as_mut_ptr() })
     }
     fn len(&self) -> usize {
         self.to_slice().len()
     }
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
     fn to_raw_parts(&self) -> (NonNull<Self::Item>, usize) {
         (self.as_ptr(), self.len())
     }
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn to_raw_parts_mut(&mut self) -> (NonNull<Self::Item>, usize) {
         (self.as_mut_ptr(), self.len())
     }
@@ -546,7 +543,6 @@ impl<B, M> BufferWithMetadata<B, M> {
         self.buffer
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn into_tuple(self) -> (B, M) {
         (self.buffer, self.metadata)
     }

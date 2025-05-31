@@ -25,22 +25,19 @@ use crate::msrv::{ptr, NonNullExt, StrictProvenance};
 use crate::utils::assert_checked;
 use crate::{
     arc::Arc,
-    buffer::{Buffer, BufferExt, BufferMut, DynBuffer, Slice, SliceExt, Subsliceable},
+    buffer::{
+        BorrowMetadata, Buffer, BufferExt, BufferMut, BufferWithMetadata, DynBuffer, Slice,
+        SliceExt, Subsliceable,
+    },
     error::{AllocError, AllocErrorImpl},
     layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, LayoutMut, StaticLayout},
-    macros::assume,
+    macros::{assume, is},
     slice_mut::{ArcSliceMutLayout, Data},
     utils::{
         debug_slice, lower_hex, panic_out_of_range, range_offset_len, subslice_offset_len,
-        upper_hex, UnwrapChecked,
+        transmute_checked, try_transmute, upper_hex, UnwrapChecked,
     },
     ArcSliceMut,
-};
-#[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
-use crate::{
-    buffer::{BorrowMetadata, BufferWithMetadata},
-    macros::is,
-    utils::{transmute_checked, try_transmute},
 };
 
 mod arc;
@@ -162,7 +159,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn from_slice_impl<E: AllocErrorImpl>(slice: &S) -> Result<Self, E>
     where
         S::Item: Copy,
@@ -183,7 +179,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Self::from_slice_impl::<Infallible>(slice).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_slice(slice: &S) -> Result<Self, AllocError>
     where
         S::Item: Copy,
@@ -290,7 +285,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(Self::init(self.start, self.length, data))
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_clone(&self) -> Result<Self, AllocError> {
         self.clone_impl::<AllocError>()
     }
@@ -312,7 +306,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_subslice(&self, range: impl RangeBounds<usize>) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -320,7 +313,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         unsafe { self.subslice_impl::<AllocError>(range_offset_len(self.as_slice(), range)) }
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_subslice_from_ref(&self, subset: &S) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -352,7 +344,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(())
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_truncate(&mut self, len: usize) -> Result<(), AllocError>
     where
         S: Subsliceable,
@@ -378,7 +369,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_split_off<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -406,7 +396,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_split_to<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -449,7 +438,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_with_layout<L2: Layout + FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.with_layout_impl::<L2, AllocError>()
     }
@@ -496,7 +484,6 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<[T], L> {
         Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, [T; N]> {
         Self::from_array_impl::<AllocError, N>(array)
     }
@@ -560,7 +547,6 @@ impl<
 }
 
 impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn from_dyn_buffer_impl<B: DynBuffer + Buffer<S>, E: AllocErrorImpl>(
         buffer: B,
     ) -> Result<Self, B> {
@@ -569,7 +555,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         Ok(Self::init(start, length, data))
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn from_static_impl<E: AllocErrorImpl>(
         slice: &'static S,
     ) -> Result<Self, &'static S> {
@@ -581,7 +566,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         ))
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn from_buffer_impl<B: Buffer<S>, E: AllocErrorImpl>(mut buffer: B) -> Result<Self, B> {
         match try_transmute::<B, &'static S>(buffer) {
             Ok(slice) => return Self::from_static_impl::<E>(slice).map_err(transmute_checked),
@@ -612,12 +596,10 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_buffer<B: Buffer<S>>(buffer: B) -> Result<Self, B> {
         Self::from_buffer_impl::<_, AllocError>(buffer)
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn from_buffer_with_metadata_impl<B: Buffer<S>, M: Send + Sync + 'static, E: AllocErrorImpl>(
         buffer: B,
         metadata: M,
@@ -637,7 +619,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_buffer_with_metadata<B: Buffer<S>, M: Send + Sync + 'static>(
         buffer: B,
         metadata: M,
@@ -650,7 +631,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_buffer_with_borrowed_metadata<B: Buffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {
@@ -676,7 +656,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
             .unwrap_checked()
     }
 
-    #[cfg(all(feature = "raw-buffer", feature = "fallible-allocations"))]
+    #[cfg(feature = "raw-buffer")]
     pub fn try_from_raw_buffer<B: RawBuffer<S>>(buffer: B) -> Result<Self, B> {
         Self::from_raw_buffer_impl::<_, AllocError>(BufferWithMetadata::new(buffer, ()))
             .map_err(|b| b.buffer())
@@ -689,7 +669,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
-    #[cfg(all(feature = "raw-buffer", feature = "fallible-allocations"))]
+    #[cfg(feature = "raw-buffer")]
     pub fn try_from_raw_buffer_and_borrowed_metadata<B: RawBuffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {

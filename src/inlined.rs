@@ -12,14 +12,13 @@ use core::{
 
 use either::Either;
 
-#[cfg(feature = "fallible-allocations")]
-use crate::error::AllocError;
 #[cfg(feature = "oom-handling")]
 use crate::layout::AnyBufferLayout;
 #[cfg(not(feature = "oom-handling"))]
 use crate::layout::CloneNoAllocLayout;
 use crate::{
     buffer::{Slice, SliceExt, Subsliceable},
+    error::AllocError,
     layout::{ArcLayout, BoxedSliceLayout, DefaultLayout, Layout, StaticLayout, VecLayout},
     msrv::ptr,
     utils::{
@@ -334,7 +333,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         SmallSlice::new(slice).map_or_else(|| ArcSlice::from_slice(slice).into(), Into::into)
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_slice(slice: &S) -> Result<Self, AllocError> {
         SmallSlice::new(slice).map_or_else(
             || Ok(ArcSlice::try_from_slice(slice)?.into()),
@@ -388,7 +386,6 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_subslice(&self, range: impl RangeBounds<usize>) -> Result<Self, AllocError>
     where
         S: Subsliceable,

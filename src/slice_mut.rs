@@ -20,26 +20,23 @@ use crate::layout::{CloneNoAllocLayout, VecLayout};
 use crate::msrv::{NonNullExt, OptionExt, StrictProvenance};
 use crate::{
     arc::Arc,
-    buffer::{BufferExt, BufferMut, Concatenable, Extendable, Slice, SliceExt},
+    buffer::{
+        BorrowMetadata, BufferExt, BufferMut, BufferWithMetadata, Concatenable, DynBuffer,
+        Extendable, Slice, SliceExt,
+    },
     error::{AllocError, AllocErrorImpl, TryReserveError},
     layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, Layout, LayoutMut},
-    macros::assume,
+    macros::{assume, is},
     msrv::{ptr, NonZero},
     slice::ArcSliceLayout,
     utils::{
-        debug_slice, lower_hex, min_non_zero_cap, panic_out_of_range, try_transmute, upper_hex,
-        UnwrapChecked,
+        debug_slice, lower_hex, min_non_zero_cap, panic_out_of_range, transmute_checked,
+        try_transmute, upper_hex, UnwrapChecked,
     },
     ArcSlice,
 };
 #[cfg(feature = "serde")]
 use crate::{buffer::Buffer, utils::assert_checked};
-#[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
-use crate::{
-    buffer::{BorrowMetadata, BufferWithMetadata, DynBuffer},
-    macros::is,
-    utils::transmute_checked,
-};
 
 mod arc;
 mod vec;
@@ -356,7 +353,6 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         }
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_freeze<L2: Layout + FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.freeze_impl::<L2, AllocError>()
     }
@@ -379,7 +375,6 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         })
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_with_layout<L2: LayoutMut + FromLayout<L>>(
         self,
     ) -> Result<ArcSliceMut<S, L2, UNIQUE>, Self> {
@@ -457,7 +452,6 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::init(NonNull::dangling(), 0, 0, None)
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn from_slice_impl<E: AllocErrorImpl>(slice: &S) -> Result<Self, E>
     where
         S::Item: Copy,
@@ -482,7 +476,6 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::from_slice_impl::<Infallible>(slice).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_slice(slice: &S) -> Result<Self, AllocError>
     where
         S::Item: Copy,
@@ -490,7 +483,6 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::from_slice_impl::<AllocError>(slice)
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn from_array_impl<E: AllocErrorImpl, const N: usize>(
         array: [S::Item; N],
     ) -> Result<Self, [S::Item; N]> {
@@ -534,7 +526,6 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::from_vec_impl::<Infallible>(vec).unwrap_checked()
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn with_capacity_impl<E: AllocErrorImpl, const ZEROED: bool>(
         capacity: usize,
     ) -> Result<Self, E> {
@@ -550,7 +541,6 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::with_capacity_impl::<Infallible, false>(capacity).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_with_capacity(capacity: usize) -> Result<Self, AllocError> {
         Self::with_capacity_impl::<AllocError, false>(capacity)
     }
@@ -560,7 +550,6 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::with_capacity_impl::<Infallible, true>(capacity).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_zeroed(capacity: usize) -> Result<Self, AllocError> {
         Self::with_capacity_impl::<AllocError, true>(capacity)
     }
@@ -598,7 +587,6 @@ impl<T: Send + Sync + 'static, L: LayoutMut> ArcSliceMut<[T], L> {
         Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, [T; N]> {
         Self::from_array_impl::<AllocError, N>(array)
     }
@@ -688,7 +676,6 @@ impl<
 }
 
 impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     pub(crate) fn from_dyn_buffer_impl<B: DynBuffer + BufferMut<S>, E: AllocErrorImpl>(
         buffer: B,
     ) -> Result<Self, B> {
@@ -696,7 +683,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
         Ok(Self::init(start, length, capacity, Some(arc.into())))
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn from_buffer_impl<B: BufferMut<S>, E: AllocErrorImpl>(mut buffer: B) -> Result<Self, B> {
         match try_transmute::<B, S::Vec>(buffer) {
             Ok(vec) => return Self::from_vec_impl::<E>(vec).map_err(transmute_checked),
@@ -716,7 +702,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
         Self::from_buffer_impl::<_, AllocError>(buffer)
     }
 
-    #[cfg(any(feature = "oom-handling", feature = "fallible-allocations"))]
     fn from_buffer_with_metadata_impl<
         B: BufferMut<S>,
         M: Send + Sync + 'static,
@@ -740,7 +725,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
         Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_buffer_with_metadata<B: BufferMut<S>, M: Send + Sync + 'static>(
         buffer: B,
         metadata: M,
@@ -753,7 +737,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
         Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
-    #[cfg(feature = "fallible-allocations")]
     pub fn try_from_buffer_with_borrowed_metadata<B: BufferMut<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {
