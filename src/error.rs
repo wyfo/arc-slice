@@ -73,7 +73,7 @@ mod private {
         }
         fn alloc<T, const ZEROED: bool>(layout: Layout) -> Result<NonNull<T>, Self> {
             assert_checked(layout.size() > 0);
-            let ptr = unsafe { (if ZEROED { alloc } else { alloc_zeroed })(layout) };
+            let ptr = unsafe { (if ZEROED { alloc_zeroed } else { alloc })(layout) };
             Ok(NonNull::new(ptr).ok_or(AllocError)?.cast())
         }
     }
@@ -83,6 +83,8 @@ mod private {
         fn new() -> Self {
             unreachable_checked()
         }
+        #[cold]
+        #[inline(never)]
         fn capacity_overflow() -> Self {
             panic!("capacity overflow")
         }
