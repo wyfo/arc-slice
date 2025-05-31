@@ -366,7 +366,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         self.truncate_impl::<AllocError>(len)
     }
 
-    fn split_off_impl<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, AllocError>
+    fn split_off_impl<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, E>
     where
         S: Subsliceable,
     {
