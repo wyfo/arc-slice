@@ -15,7 +15,7 @@ use core::{
 };
 
 #[cfg(not(feature = "oom-handling"))]
-use crate::layout::{CloneNoAllocLayout, VecLayout};
+use crate::layout::{ArcLayout, CloneNoAllocLayout, VecLayout};
 #[allow(unused_imports)]
 use crate::msrv::{NonNullExt, OptionExt, StrictProvenance};
 use crate::{
@@ -414,18 +414,28 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
     }
 }
 
-impl<
-        S: Slice + ?Sized,
-        #[cfg(feature = "oom-handling")] L: LayoutMut,
-        #[cfg(not(feature = "oom-handling"))] L: LayoutMut + CloneNoAllocLayout,
-        const UNIQUE: bool,
-    > ArcSliceMut<S, L, UNIQUE>
-{
+#[cfg(feature = "oom-handling")]
+impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQUE> {
     pub fn freeze<L2: FromLayout<L>>(self) -> ArcSlice<S, L2> {
         self.freeze_impl::<L2, Infallible>().unwrap_checked()
     }
 
     pub fn with_layout<L2: LayoutMut + FromLayout<L>>(self) -> ArcSliceMut<S, L2, UNIQUE> {
+        self.with_layout_impl::<L2, Infallible>().unwrap_checked()
+    }
+}
+
+#[cfg(not(feature = "oom-handling"))]
+impl<S: Slice + ?Sized, const ANY_BUFFER: bool, const STATIC: bool, const UNIQUE: bool>
+    ArcSliceMut<S, ArcLayout<ANY_BUFFER, STATIC>, UNIQUE>
+{
+    pub fn freeze<L2: FromLayout<ArcLayout<ANY_BUFFER, STATIC>>>(self) -> ArcSlice<S, L2> {
+        self.freeze_impl::<L2, Infallible>().unwrap_checked()
+    }
+
+    pub fn with_layout<L2: LayoutMut + FromLayout<ArcLayout<ANY_BUFFER, STATIC>>>(
+        self,
+    ) -> ArcSliceMut<S, L2, UNIQUE> {
         self.with_layout_impl::<L2, Infallible>().unwrap_checked()
     }
 }

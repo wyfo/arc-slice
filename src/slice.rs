@@ -16,7 +16,9 @@ use core::{
 #[cfg(feature = "raw-buffer")]
 use crate::buffer::RawBuffer;
 #[cfg(not(feature = "oom-handling"))]
-use crate::layout::{BoxedSliceLayout, CloneNoAllocLayout, TruncateNoAllocLayout, VecLayout};
+use crate::layout::{
+    ArcLayout, BoxedSliceLayout, CloneNoAllocLayout, TruncateNoAllocLayout, VecLayout,
+};
 #[allow(unused_imports)]
 use crate::msrv::ConstPtrExt;
 #[allow(unused_imports)]
@@ -549,8 +551,20 @@ impl<
     {
         self.split_to_impl::<Infallible>(at).unwrap_checked()
     }
+}
 
+#[cfg(feature = "oom-handling")]
+impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     pub fn with_layout<L2: FromLayout<L>>(self) -> ArcSlice<S, L2> {
+        self.with_layout_impl::<L2, Infallible>().unwrap_checked()
+    }
+}
+
+#[cfg(not(feature = "oom-handling"))]
+impl<S: Slice + ?Sized, const ANY_BUFFER: bool, const STATIC: bool>
+    ArcSlice<S, ArcLayout<ANY_BUFFER, STATIC>>
+{
+    pub fn with_layout<L2: FromLayout<ArcLayout<ANY_BUFFER, STATIC>>>(self) -> ArcSlice<S, L2> {
         self.with_layout_impl::<L2, Infallible>().unwrap_checked()
     }
 }
