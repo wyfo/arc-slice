@@ -8,7 +8,7 @@ use bstr::{BStr, BString, ByteSlice};
 #[cfg(feature = "serde")]
 use crate::buffer::Deserializable;
 use crate::{
-    buffer::{Buffer, BufferMut, Concatenable, Extendable, Slice, Subsliceable},
+    buffer::{Buffer, BufferMut, Concatenable, Extendable, Slice, Subsliceable, Zeroable},
     error::TryReserveError,
 };
 
@@ -47,6 +47,8 @@ unsafe impl Slice for BStr {
         Ok(slice.as_bstr())
     }
 }
+
+unsafe impl Zeroable for BStr {}
 
 unsafe impl Subsliceable for BStr {
     unsafe fn check_subslice(&self, _start: usize, _end: usize) {}

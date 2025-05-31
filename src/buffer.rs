@@ -87,6 +87,9 @@ pub(crate) trait SliceExt: Slice {
 impl<S: Slice + ?Sized> SliceExt for S {}
 
 #[allow(clippy::missing_safety_doc)]
+pub unsafe trait Zeroable: Slice {}
+
+#[allow(clippy::missing_safety_doc)]
 pub unsafe trait Subsliceable: Slice {
     unsafe fn check_subslice(&self, start: usize, end: usize);
     unsafe fn check_advance(&self, offset: usize) {
@@ -161,6 +164,12 @@ unsafe impl<T: Send + Sync + 'static> Slice for [T] {
         Ok(slice)
     }
 }
+
+#[cfg(feature = "bytemuck")]
+unsafe impl<T: bytemuck::Zeroable + Send + Sync + 'static> Zeroable for [T] {}
+#[cfg(not(feature = "bytemuck"))]
+unsafe impl Zeroable for [u8] {}
+unsafe impl Zeroable for str {}
 
 unsafe impl<T: Send + Sync + 'static> Subsliceable for [T] {
     unsafe fn check_subslice(&self, _start: usize, _end: usize) {}

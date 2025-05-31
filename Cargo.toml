@@ -23,6 +23,7 @@ repository = "https://github.com/wyfo/arc-slice"
 default = ["abort-on-refcount-overflow", "oom-handling", "std"]
 abort-on-refcount-overflow = []
 bstr = ["dep:bstr"]
+bytemuck = ["dep:bytemuck"]
 bytes = ["dep:bytes"]
 inlined = ["dep:either"]
 oom-handling = []
@@ -41,6 +42,7 @@ default-layout-mut-any-buffer = []
 default-layout-mut-vec = []
 
 [dependencies]
+bytemuck = { version = "1", default-features = false, optional = true }
 bytes = { version = "1", default-features = false, optional = true }
 bstr = { version = "1", default-features = false, features = ["alloc"], optional = true }
 cfg-if = "1"

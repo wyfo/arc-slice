@@ -22,7 +22,7 @@ use crate::{
     arc::Arc,
     buffer::{
         BorrowMetadata, BufferExt, BufferMut, BufferWithMetadata, Concatenable, DynBuffer,
-        Extendable, Slice, SliceExt,
+        Extendable, Slice, SliceExt, Zeroable,
     },
     error::{AllocError, AllocErrorImpl, TryReserveError},
     layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, Layout, LayoutMut},
@@ -533,7 +533,8 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
             return Ok(Self::new());
         }
         let (arc, start) = Arc::<S>::with_capacity::<E, ZEROED>(capacity)?;
-        Ok(Self::init(start, 0, capacity, Some(arc.into())))
+        let length = if ZEROED { capacity } else { 0 };
+        Ok(Self::init(start, length, capacity, Some(arc.into())))
     }
 
     #[cfg(feature = "oom-handling")]
@@ -546,12 +547,18 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     }
 
     #[cfg(feature = "oom-handling")]
-    pub fn zeroed(capacity: usize) -> Self {
-        Self::with_capacity_impl::<Infallible, true>(capacity).unwrap_checked()
+    pub fn zeroed(length: usize) -> Self
+    where
+        S: Zeroable,
+    {
+        Self::with_capacity_impl::<Infallible, true>(length).unwrap_checked()
     }
 
-    pub fn try_zeroed(capacity: usize) -> Result<Self, AllocError> {
-        Self::with_capacity_impl::<AllocError, true>(capacity)
+    pub fn try_zeroed(length: usize) -> Result<Self, AllocError>
+    where
+        S: Zeroable,
+    {
+        Self::with_capacity_impl::<AllocError, true>(length)
     }
 
     #[cfg(feature = "oom-handling")]

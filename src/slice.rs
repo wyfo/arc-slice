@@ -159,6 +159,14 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
+    pub const fn new() -> Self
+    where
+        L: StaticLayout,
+    {
+        let data = unsafe { L::STATIC_DATA_UNCHECKED.assume_init() };
+        Self::init(NonNull::dangling(), 0, data)
+    }
+
     fn from_slice_impl<E: AllocErrorImpl>(slice: &S) -> Result<Self, E>
     where
         S::Item: Copy,
@@ -674,13 +682,6 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         buffer: B,
     ) -> Result<Self, B> {
         Self::from_dyn_buffer_impl::<_, AllocError>(buffer)
-    }
-}
-
-impl<S: Slice + ?Sized, L: StaticLayout> ArcSlice<S, L> {
-    pub const fn new() -> Self {
-        let data = unsafe { L::STATIC_DATA_UNCHECKED.assume_init() };
-        Self::init(NonNull::dangling(), 0, data)
     }
 }
 
