@@ -1,5 +1,12 @@
 # arc-slice
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](
+https://github.com/wyfo/arc-slice/blob/main/LICENSE)
+[![Cargo](https://img.shields.io/crates/v/arc-slice.svg)](
+https://crates.io/crates/arc-slice)
+[![Documentation](https://docs.rs/arc-slice/badge.svg)](
+https://docs.rs/arc-slice)
+
 A utility library for working with shared slices of memory.
 
 ## Example
