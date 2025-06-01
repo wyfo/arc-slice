@@ -157,7 +157,7 @@ impl TruncateNoAllocLayout for RawLayout {}
 
 /// A layout that can be converted from another one.
 ///
-/// Only layouts not implementing [`AnyBuffer`] cannot be converted from those implementing it.
+/// Only layouts not implementing [`AnyBufferLayout`] cannot be converted from those implementing it.
 pub trait FromLayout<L: Layout>: Layout {}
 
 impl<const STATIC: bool, L: Layout> FromLayout<ArcLayout<false, STATIC>> for L {}
