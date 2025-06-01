@@ -1,3 +1,7 @@
+//! [Small String Optimization] support for [`ArcSlice`].
+//!
+//! [Small String Optimization]: https://cppdepend.com/blog/understanding-small-string-optimization-sso-in-stdstring/
+
 use alloc::{string::String, vec::Vec};
 use core::{
     borrow::Borrow,
@@ -64,6 +68,7 @@ unsafe impl InlinedLayout for crate::layout::RawLayout {
     const UNINIT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
 }
 
+/// An inlined storage that can contains up to `size_of::<ArcBytes<L>>() - 2` bytes.
 #[repr(C)]
 pub struct SmallSlice<S: Slice<Item = u8> + ?Sized, L: Layout = DefaultLayout> {
     #[cfg(target_endian = "big")]
@@ -85,6 +90,7 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         _phantom: PhantomData,
     };
 
+    /// Create a new [`SmallSlice`] if the slice fit in.
     pub fn new(slice: &S) -> Option<Self> {
         if slice.len() > Self::MAX_LEN {
             return None;
@@ -308,6 +314,11 @@ impl<L: Layout> PartialEq<SmallSlice<str, L>> for String {
     }
 }
 
+/// As SSO-enabled implementation of [`ArcSlice`].
+///
+/// It can store up to `size_of::<ArcBytes<L>>() - 2` bytes without allocating. However,
+/// the niche optimization of `ArcSlice` is lost, which means that
+/// `size_of::<SmallArcSlice<[u8], L>>() == size_of::<ArcSlice<[u8], L>>() + size_of::<usize>()`.
 pub struct SmallArcSlice<S: Slice<Item = u8> + ?Sized, L: Layout = DefaultLayout>(Inner<S, L>);
 
 #[repr(C)]

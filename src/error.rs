@@ -1,3 +1,5 @@
+//! The errors.
+
 use core::fmt;
 
 pub(crate) use private::AllocErrorImpl;

@@ -9,7 +9,7 @@
 //! - `bstr`: implement slice traits for [`bstr`](::bstr) crate, allowing to use `ArcSlice<BStr>`.
 //! - `bytemuck`: use [`bytemuck::Zeroable`] as bound for arbitrary slice initialization with [`ArcSliceMut::zeroed`].
 //! - `bytes`: implement [`Buf`](::bytes::Buf)/[`BufMut`](::bytes::BufMut) for [`ArcSlice`]/[`ArcSliceMut`].
-//! - `inlined`: enable [small string optimization] for [`ArcSlice`] with
+//! - `inlined`: enable [Small String Optimization] for [`ArcSlice`] with
 //!   [`inlined::SmallArcSlice`];
 //! - `oom-handling` (default): enable global [Out Of Memory handling] and provide infallible
 //!   methods involving allocations.
@@ -34,7 +34,7 @@
 //! - `default-layout-vec`: override the default layout to [`VecLayout`](layout::VecLayout)
 //!   for [`ArcSliceMut`].
 //!
-//! [small string optimization]: https://cppdepend.com/blog/understanding-small-string-optimization-sso-in-stdstring/
+//! [Small String Optimization]: https://cppdepend.com/blog/understanding-small-string-optimization-sso-in-stdstring/
 //! [Out Of Memory handling]: alloc::alloc::handle_alloc_error
 //! [`ArcLayout`]: layout::ArcLayout
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
@@ -68,11 +68,17 @@ pub use crate::{
     slice_mut::ArcSliceMut,
 };
 
+/// An alias for `ArcSlice<[u8], L>`.
 pub type ArcBytes<L = layout::DefaultLayout> = ArcSlice<[u8], L>;
+/// An alias for `ArcSliceBorrow<[u8], L>`.
 pub type ArcBytesBorrow<'a, L = layout::DefaultLayout> = ArcSliceBorrow<'a, [u8], L>;
+/// An alias for `ArcSliceMut<[u8], L>`.
 pub type ArcBytesMut<L = layout::DefaultLayoutMut, const UNIQUE: bool = true> =
     ArcSliceMut<[u8], L, UNIQUE>;
+/// An alias for `ArcSlice<str, L>`.
 pub type ArcStr<L = layout::DefaultLayout> = ArcSlice<str, L>;
+/// An alias for `ArcSliceBorrow<str, L>`.
 pub type ArcStrBorrow<'a, L = layout::DefaultLayout> = ArcSliceBorrow<'a, str, L>;
+/// An alias for `ArcSliceMut<str, L>`.
 pub type ArcStrMut<L = layout::DefaultLayoutMut, const UNIQUE: bool = true> =
     ArcSliceMut<str, L, UNIQUE>;
