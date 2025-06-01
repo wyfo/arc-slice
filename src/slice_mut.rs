@@ -205,13 +205,14 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         self.length = new_len;
     }
 
-    pub(crate) fn push(&mut self, item: S::Item)
+    pub fn try_push(&mut self, item: S::Item) -> Result<(), TryReserveError>
     where
         S: Extendable,
     {
-        self.try_reserve(1).unwrap();
+        self.try_reserve(1)?;
         unsafe { self.start.as_ptr().add(self.length).write(item) };
         self.length += 1;
+        Ok(())
     }
 
     pub fn try_reclaim(&mut self, additional: usize) -> bool {
@@ -592,6 +593,16 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
             }
             panic_reserve(err);
         }
+    }
+
+    #[cfg(feature = "oom-handling")]
+    pub fn push(&mut self, item: S::Item)
+    where
+        S: Extendable,
+    {
+        self.reserve(1);
+        unsafe { self.start.as_ptr().add(self.length).write(item) };
+        self.length += 1;
     }
 
     #[cfg(feature = "oom-handling")]
@@ -1045,32 +1056,22 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize, const UNIQUE: bool>
     }
 }
 
-impl<S: Emptyable + Extendable + ?Sized, L: LayoutMut, const UNIQUE: bool> Extend<S::Item>
-    for ArcSliceMut<S, L, UNIQUE>
-{
+#[cfg(feature = "oom-handling")]
+impl<S: Emptyable + Extendable + ?Sized, L: LayoutMut> Extend<S::Item> for ArcSliceMut<S, L> {
     fn extend<I: IntoIterator<Item = S::Item>>(&mut self, iter: I) {
         let iter = iter.into_iter();
-        self.try_reserve(iter.size_hint().0).unwrap();
+        self.reserve(iter.size_hint().0);
         for item in iter {
             self.push(item);
         }
     }
 }
 
+#[cfg(feature = "oom-handling")]
 impl<S: Emptyable + Extendable + ?Sized, L: LayoutMut> FromIterator<S::Item> for ArcSliceMut<S, L> {
     fn from_iter<T: IntoIterator<Item = S::Item>>(iter: T) -> Self {
         let mut this = Self::new();
-        let iter = iter.into_iter();
-        this.try_reserve(iter.size_hint().0).unwrap();
-        let mut len = this.len();
-        for item in iter {
-            if this.spare_capacity() == 0 {
-                this.try_reserve(1).unwrap();
-            }
-            unsafe { this.start.as_ptr().add(len).write(item) };
-            len += 1;
-            unsafe { this.set_len(len) }
-        }
+        this.extend(iter);
         this
     }
 }
