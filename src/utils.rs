@@ -29,43 +29,12 @@ pub(crate) fn try_as_bytes<S: Slice + ?Sized>(slice: &S) -> Option<&[u8]> {
     is!(&'static S, &'static [u8]).then(|| unsafe { slice.to_slice().align_to().1 })
 }
 
-/// Alternative implementation of `std::fmt::Debug` for byte slice.
-///
-/// Standard `Debug` implementation for `[u8]` is comma separated
-/// list of numbers. Since large amount of byte strings are in fact
-/// ASCII strings or contain a lot of ASCII strings (e. g. HTTP),
-/// it is convenient to print strings as ASCII when possible.
-fn debug_bytes(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    write!(f, "b\"")?;
-    for &b in bytes {
-        // https://doc.rust-lang.org/reference/tokens.html#byte-escapes
-        if b == b'\n' {
-            write!(f, "\\n")?;
-        } else if b == b'\r' {
-            write!(f, "\\r")?;
-        } else if b == b'\t' {
-            write!(f, "\\t")?;
-        } else if b == b'\\' || b == b'"' {
-            write!(f, "\\{}", b as char)?;
-        } else if b == b'\0' {
-            write!(f, "\\0")?;
-        // ASCII printable
-        } else if (0x20..0x7f).contains(&b) {
-            write!(f, "{}", b as char)?;
-        } else {
-            write!(f, "\\x{b:02x}")?;
-        }
-    }
-    write!(f, "\"")?;
-    Ok(())
-}
-
 pub(crate) fn debug_slice<S: fmt::Debug + Slice + ?Sized>(
     slice: &S,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
     match try_as_bytes(slice) {
-        Some(bytes) => debug_bytes(bytes, f),
+        Some(bytes) => write!(f, "b\"{}\"", bytes.escape_ascii()),
         None => write!(f, "{slice:?}"),
     }
 }
