@@ -1,7 +1,7 @@
 #[cfg(feature = "serde")]
 use alloc::string::String;
 use alloc::{boxed::Box, vec::Vec};
-use core::{convert::Infallible, fmt::Formatter};
+use core::convert::Infallible;
 
 use bstr::{BStr, BString, ByteSlice};
 
@@ -73,7 +73,7 @@ impl Deserializable for BStr {
     ) -> Result<V::Value, D::Error> {
         deserializer.deserialize_byte_buf(visitor)
     }
-    fn expecting(f: &mut Formatter) -> core::fmt::Result {
+    fn expecting(f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "a byte string")
     }
     fn deserialize_from_bytes<E: serde::de::Error>(bytes: &[u8]) -> Result<&Self, E> {
