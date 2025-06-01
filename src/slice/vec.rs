@@ -166,7 +166,7 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
 
     fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         mut vec: S::Vec,
-    ) -> Result<Self::Data, S::Vec> {
+    ) -> Result<Self::Data, (E, S::Vec)> {
         Ok(if let Some(base) = L::get_base::<S>(&mut vec) {
             let capacity = ManuallyDrop::new(vec).capacity();
             (DataPtr::new_capacity(capacity), MaybeUninit::new(base))
@@ -217,7 +217,9 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         if !Self::TRUNCATABLE || S::needs_drop() {
             if let Data::Capacity(capacity) = ptr.get_mut::<S>() {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
-                *ptr = DataPtr::new_arc(Arc::<S>::new_vec::<E>(vec).map_err(E::forget)?);
+                *ptr = DataPtr::new_arc(
+                    Arc::<S>::new_vec::<E>(vec).map_err(|(err, v)| err.forget(v))?,
+                );
             }
         }
         Ok(())

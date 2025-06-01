@@ -67,7 +67,7 @@ unsafe impl ArcSliceMutLayout for VecLayout {
     unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
         offset: usize,
-    ) -> Result<Data, S::Vec> {
+    ) -> Result<Data, (E, S::Vec)> {
         mem::forget(vec);
         Ok(OffsetOrArc::Offset::<S>(offset).into())
     }
@@ -215,7 +215,7 @@ unsafe impl ArcSliceMutLayout for VecLayout {
             OffsetOrArc::Arc(arc) => Ok(L::data_from_arc(ManuallyDrop::into_inner(arc))),
             OffsetOrArc::Offset(offset) => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) };
-                L::data_from_vec::<S, E>(vec).map_err(E::forget)
+                L::data_from_vec::<S, E>(vec).map_err(|(err, v)| err.forget(v))
             }
         }
     }

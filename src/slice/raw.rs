@@ -144,8 +144,8 @@ mod raw_vtable {
         ptr: *const (),
     ) -> Result<Option<NonNull<()>>, AllocError> {
         let buffer = unsafe { B::from_raw(ptr) };
-        let (arc, _, _) =
-            Arc::<S>::new_buffer::<_, AllocError>(buffer).map_err(AllocError::forget)?;
+        let (arc, _, _) = Arc::<S>::new_buffer::<_, AllocError>(buffer)
+            .map_err(|(err, buffer)| err.forget(buffer))?;
         Ok(Some(arc.into_raw()))
     }
 
@@ -212,13 +212,13 @@ unsafe impl ArcSliceLayout for RawLayout {
 
     fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
         _slice: &'static S,
-    ) -> Result<Self::Data, &'static S> {
+    ) -> Result<Self::Data, (E, &'static S)> {
         Ok((ptr::null(), Some(static_vtable::new_vtable::<S>())))
     }
 
     fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
-    ) -> Result<Self::Data, S::Vec> {
+    ) -> Result<Self::Data, (E, S::Vec)> {
         Ok((
             Arc::<S>::new_vec::<E>(vec)?.into_raw().as_ptr(),
             Some(arc_vtable::new_vec::<S>()),

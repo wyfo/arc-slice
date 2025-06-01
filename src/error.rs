@@ -47,17 +47,13 @@ mod private {
     use alloc::alloc::{alloc, alloc_zeroed, handle_alloc_error};
     use core::{alloc::Layout, convert::Infallible, mem, ptr::NonNull};
 
-    use crate::{
-        error::AllocError,
-        utils::{assert_checked, unreachable_checked},
-    };
+    use crate::{error::AllocError, utils::assert_checked};
 
     pub trait AllocErrorImpl: Sized {
         const FALLIBLE: bool;
-        fn new() -> Self;
-        fn forget<E>(error: E) -> Self {
-            mem::forget(error);
-            Self::new()
+        fn forget<T>(self, x: T) -> Self {
+            mem::forget(x);
+            self
         }
         fn capacity_overflow() -> Self;
         fn alloc<T, const ZEROED: bool>(layout: Layout) -> Result<NonNull<T>, Self>;
@@ -65,9 +61,6 @@ mod private {
 
     impl AllocErrorImpl for AllocError {
         const FALLIBLE: bool = true;
-        fn new() -> Self {
-            Self
-        }
         fn capacity_overflow() -> Self {
             Self
         }
@@ -80,9 +73,6 @@ mod private {
 
     impl AllocErrorImpl for Infallible {
         const FALLIBLE: bool = false;
-        fn new() -> Self {
-            unreachable_checked()
-        }
         #[cold]
         #[inline(never)]
         fn capacity_overflow() -> Self {

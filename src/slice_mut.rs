@@ -81,7 +81,7 @@ pub unsafe trait ArcSliceMutLayout {
     unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
         offset: usize,
-    ) -> Result<Data, S::Vec>;
+    ) -> Result<Data, (E, S::Vec)>;
     fn clone<S: Slice + ?Sized, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
@@ -345,7 +345,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
             Some(data) => L::frozen_data::<S, L2, E>(this.start, this.length, this.capacity, data),
             None => {
                 L2::data_from_static::<_, E>(unsafe { S::from_raw_parts(this.start, this.length) })
-                    .map_err(E::forget)
+                    .map_err(|(err, _)| err)
             }
         };
         match data {
@@ -520,7 +520,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::from_vec(vec)
     }
 
-    pub(crate) fn from_vec_impl<E: AllocErrorImpl>(mut vec: S::Vec) -> Result<Self, S::Vec> {
+    pub(crate) fn from_vec_impl<E: AllocErrorImpl>(mut vec: S::Vec) -> Result<Self, (E, S::Vec)> {
         let capacity = vec.capacity();
         if capacity == 0 {
             return Ok(unsafe { Self::empty() });
@@ -606,7 +606,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
 impl<T: Send + Sync + 'static, L: LayoutMut> ArcSliceMut<[T], L> {
     pub(crate) fn from_array_impl<E: AllocErrorImpl, const N: usize>(
         array: [T; N],
-    ) -> Result<Self, [T; N]> {
+    ) -> Result<Self, (E, [T; N])> {
         if N == 0 {
             return Ok(Self::new());
         }
@@ -620,7 +620,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut> ArcSliceMut<[T], L> {
     }
 
     pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, [T; N]> {
-        Self::from_array_impl::<AllocError, N>(array)
+        Self::from_array_impl::<AllocError, N>(array).map_err(|(_, array)| array)
     }
 }
 
@@ -710,18 +710,21 @@ impl<
 impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
     pub(crate) fn from_dyn_buffer_impl<B: DynBuffer + BufferMut<S>, E: AllocErrorImpl>(
         buffer: B,
-    ) -> Result<Self, B> {
+    ) -> Result<Self, (E, B)> {
         let (arc, start, length, capacity) = Arc::new_buffer_mut::<_, E>(buffer)?;
         Ok(Self::init(start, length, capacity, Some(arc.into())))
     }
 
-    fn from_buffer_impl<B: BufferMut<S>, E: AllocErrorImpl>(mut buffer: B) -> Result<Self, B> {
+    fn from_buffer_impl<B: BufferMut<S>, E: AllocErrorImpl>(mut buffer: B) -> Result<Self, (E, B)> {
         match try_transmute::<B, S::Vec>(buffer) {
-            Ok(vec) => return Self::from_vec_impl::<E>(vec).map_err(transmute_checked),
+            Ok(vec) => {
+                return Self::from_vec_impl::<E>(vec)
+                    .map_err(|(err, v)| (err, transmute_checked(v)))
+            }
             Err(b) => buffer = b,
         }
         Self::from_dyn_buffer_impl::<_, E>(BufferWithMetadata::new(buffer, ()))
-            .map_err(|b| b.buffer())
+            .map_err(|(err, b)| (err, b.buffer()))
     }
 
     #[cfg(feature = "oom-handling")]
@@ -729,9 +732,8 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
         Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
-    #[cfg(feature = "oom-handling")]
     pub fn try_from_buffer<B: BufferMut<S>>(buffer: B) -> Result<Self, B> {
-        Self::from_buffer_impl::<_, AllocError>(buffer)
+        Self::from_buffer_impl::<_, AllocError>(buffer).map_err(|(_, buffer)| buffer)
     }
 
     fn from_buffer_with_metadata_impl<
@@ -741,12 +743,12 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
     >(
         buffer: B,
         metadata: M,
-    ) -> Result<Self, (B, M)> {
+    ) -> Result<Self, (E, (B, M))> {
         if is!(M, ()) {
-            return Self::from_buffer_impl::<_, E>(buffer).map_err(|b| (b, metadata));
+            return Self::from_buffer_impl::<_, E>(buffer).map_err(|(err, b)| (err, (b, metadata)));
         }
         Self::from_dyn_buffer_impl::<_, E>(BufferWithMetadata::new(buffer, metadata))
-            .map_err(|b| b.into_tuple())
+            .map_err(|(err, b)| (err, b.into_tuple()))
     }
 
     #[cfg(feature = "oom-handling")]
@@ -762,6 +764,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
         metadata: M,
     ) -> Result<Self, (B, M)> {
         Self::from_buffer_with_metadata_impl::<_, _, AllocError>(buffer, metadata)
+            .map_err(|(_, bm)| bm)
     }
 
     #[cfg(feature = "oom-handling")]
@@ -772,7 +775,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
     pub fn try_from_buffer_with_borrowed_metadata<B: BufferMut<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {
-        Self::from_dyn_buffer_impl::<_, AllocError>(buffer)
+        Self::from_dyn_buffer_impl::<_, AllocError>(buffer).map_err(|(_, buffer)| buffer)
     }
 }
 

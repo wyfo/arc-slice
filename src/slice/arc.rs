@@ -66,19 +66,19 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
 
     fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
         slice: &'static S,
-    ) -> Result<Self::Data, &'static S> {
+    ) -> Result<Self::Data, (E, &'static S)> {
         if let Some(data) = Self::STATIC_DATA {
             return Ok(data);
         }
         assert_checked(ANY_BUFFER);
-        let (arc, _, _) =
-            Arc::new_buffer::<_, E>(BufferWithMetadata::new(slice, ())).map_err(|_| slice)?;
+        let (arc, _, _) = Arc::new_buffer::<_, E>(BufferWithMetadata::new(slice, ()))
+            .map_err(|(err, b)| (err, b.buffer()))?;
         Ok(Self::data_from_arc(arc))
     }
 
     fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
-    ) -> Result<Self::Data, S::Vec> {
+    ) -> Result<Self::Data, (E, S::Vec)> {
         assert_checked(ANY_BUFFER);
         Ok(Some(Arc::<S>::new_vec::<E>(vec)?.into_raw()))
     }

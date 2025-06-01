@@ -26,7 +26,7 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceMutLayout
     unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
         _offset: usize,
-    ) -> Result<Data, S::Vec> {
+    ) -> Result<Data, (E, S::Vec)> {
         Ok(Arc::<S>::new_vec::<E>(vec)?.into_raw().into())
     }
 

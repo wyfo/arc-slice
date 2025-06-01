@@ -72,12 +72,12 @@ pub unsafe trait ArcSliceLayout: 'static {
     }
     fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
         _slice: &'static S,
-    ) -> Result<Self::Data, &'static S> {
+    ) -> Result<Self::Data, (E, &'static S)> {
         Ok(Self::STATIC_DATA.unwrap())
     }
     fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
-    ) -> Result<Self::Data, S::Vec>;
+    ) -> Result<Self::Data, (E, S::Vec)>;
     #[cfg(feature = "raw-buffer")]
     fn data_from_raw_buffer<S: Slice + ?Sized, B: DynBuffer + RawBuffer<S>>(
         _buffer: *const (),
@@ -203,7 +203,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     fn from_array_impl<E: AllocErrorImpl, const N: usize>(
         array: [S::Item; N],
-    ) -> Result<Self, [S::Item; N]> {
+    ) -> Result<Self, (E, [S::Item; N])> {
         if let Some(empty) = Self::new_empty(NonNull::dangling(), N) {
             return Ok(empty);
         }
@@ -233,9 +233,9 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Self::from_vec(vec)
     }
 
-    pub(crate) fn from_vec_impl<E: AllocErrorImpl>(mut vec: S::Vec) -> Result<Self, S::Vec> {
+    pub(crate) fn from_vec_impl<E: AllocErrorImpl>(mut vec: S::Vec) -> Result<Self, (E, S::Vec)> {
         if vec.capacity() == 0 {
-            return Self::from_array_impl::<E, 0>([]).map_err(|_| vec);
+            return Self::from_array_impl::<E, 0>([]).map_err(|(err, _)| (err, vec));
         }
         let start = S::vec_start(&mut vec);
         Ok(Self::init(start, vec.len(), L::data_from_vec::<S, E>(vec)?))
@@ -498,7 +498,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<[T], L> {
     }
 
     pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, [T; N]> {
-        Self::from_array_impl::<AllocError, N>(array)
+        Self::from_array_impl::<AllocError, N>(array).map_err(|(_, array)| array)
     }
 }
 
@@ -574,7 +574,7 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool, const STATIC: bool>
 impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     pub(crate) fn from_dyn_buffer_impl<B: DynBuffer + Buffer<S>, E: AllocErrorImpl>(
         buffer: B,
-    ) -> Result<Self, B> {
+    ) -> Result<Self, (E, B)> {
         let (arc, start, length) = Arc::new_buffer::<_, E>(buffer)?;
         let data = L::data_from_arc_buffer::<S, true, B>(arc);
         Ok(Self::init(start, length, data))
@@ -582,7 +582,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
 
     pub(crate) fn from_static_impl<E: AllocErrorImpl>(
         slice: &'static S,
-    ) -> Result<Self, &'static S> {
+    ) -> Result<Self, (E, &'static S)> {
         let (start, length) = slice.to_raw_parts();
         Ok(Self::init(
             start,
@@ -591,9 +591,12 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         ))
     }
 
-    fn from_buffer_impl<B: Buffer<S>, E: AllocErrorImpl>(mut buffer: B) -> Result<Self, B> {
+    fn from_buffer_impl<B: Buffer<S>, E: AllocErrorImpl>(mut buffer: B) -> Result<Self, (E, B)> {
         match try_transmute::<B, &'static S>(buffer) {
-            Ok(slice) => return Self::from_static_impl::<E>(slice).map_err(transmute_checked),
+            Ok(slice) => {
+                return Self::from_static_impl::<E>(slice)
+                    .map_err(|(err, s)| (err, transmute_checked(s)))
+            }
             Err(b) => buffer = b,
         }
         match try_transmute::<B, Box<S>>(buffer) {
@@ -601,19 +604,25 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
                 let vec = unsafe { S::from_vec_unchecked(boxed.into_boxed_slice().into_vec()) };
                 return match Self::from_vec_impl::<E>(vec) {
                     Ok(this) => Ok(this),
-                    Err(vec) => Err(transmute_checked(unsafe {
-                        S::from_boxed_slice_unchecked(S::into_vec(vec).into_boxed_slice())
-                    })),
+                    Err((err, vec)) => Err((
+                        err,
+                        transmute_checked(unsafe {
+                            S::from_boxed_slice_unchecked(S::into_vec(vec).into_boxed_slice())
+                        }),
+                    )),
                 };
             }
             Err(b) => buffer = b,
         }
         match try_transmute::<B, S::Vec>(buffer) {
-            Ok(vec) => return Self::from_vec_impl::<E>(vec).map_err(transmute_checked),
+            Ok(vec) => {
+                return Self::from_vec_impl::<E>(vec)
+                    .map_err(|(err, v)| (err, transmute_checked(v)))
+            }
             Err(b) => buffer = b,
         }
         Self::from_dyn_buffer_impl::<_, E>(BufferWithMetadata::new(buffer, ()))
-            .map_err(|b| b.buffer())
+            .map_err(|(err, b)| (err, b.buffer()))
     }
 
     #[cfg(feature = "oom-handling")]
@@ -622,18 +631,18 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     }
 
     pub fn try_from_buffer<B: Buffer<S>>(buffer: B) -> Result<Self, B> {
-        Self::from_buffer_impl::<_, AllocError>(buffer)
+        Self::from_buffer_impl::<_, AllocError>(buffer).map_err(|(_, buffer)| buffer)
     }
 
     fn from_buffer_with_metadata_impl<B: Buffer<S>, M: Send + Sync + 'static, E: AllocErrorImpl>(
         buffer: B,
         metadata: M,
-    ) -> Result<Self, (B, M)> {
+    ) -> Result<Self, (E, (B, M))> {
         if is!(M, ()) {
-            return Self::from_buffer_impl::<_, E>(buffer).map_err(|b| (b, metadata));
+            return Self::from_buffer_impl::<_, E>(buffer).map_err(|(err, b)| (err, (b, metadata)));
         }
         Self::from_dyn_buffer_impl::<_, E>(BufferWithMetadata::new(buffer, metadata))
-            .map_err(|b| b.into_tuple())
+            .map_err(|(err, b)| (err, b.into_tuple()))
     }
 
     #[cfg(feature = "oom-handling")]
@@ -649,6 +658,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         metadata: M,
     ) -> Result<Self, (B, M)> {
         Self::from_buffer_with_metadata_impl::<_, _, AllocError>(buffer, metadata)
+            .map_err(|(_, bm)| bm)
     }
 
     #[cfg(feature = "oom-handling")]
@@ -659,13 +669,13 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     pub fn try_from_buffer_with_borrowed_metadata<B: Buffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {
-        Self::from_dyn_buffer_impl::<_, AllocError>(buffer)
+        Self::from_dyn_buffer_impl::<_, AllocError>(buffer).map_err(|(_, buffer)| buffer)
     }
 
     #[cfg(feature = "raw-buffer")]
     fn from_raw_buffer_impl<B: DynBuffer + RawBuffer<S>, E: AllocErrorImpl>(
         buffer: B,
-    ) -> Result<Self, B> {
+    ) -> Result<Self, (E, B)> {
         let ptr = buffer.into_raw();
         if let Some(data) = L::data_from_raw_buffer::<S, B>(ptr) {
             let buffer = ManuallyDrop::new(unsafe { B::from_raw(ptr) });
@@ -684,7 +694,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     #[cfg(feature = "raw-buffer")]
     pub fn try_from_raw_buffer<B: RawBuffer<S>>(buffer: B) -> Result<Self, B> {
         Self::from_raw_buffer_impl::<_, AllocError>(BufferWithMetadata::new(buffer, ()))
-            .map_err(|b| b.buffer())
+            .map_err(|(_, b)| b.buffer())
     }
 
     #[cfg(all(feature = "raw-buffer", feature = "oom-handling"))]
@@ -698,7 +708,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     pub fn try_from_raw_buffer_and_borrowed_metadata<B: RawBuffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {
-        Self::from_dyn_buffer_impl::<_, AllocError>(buffer)
+        Self::from_dyn_buffer_impl::<_, AllocError>(buffer).map_err(|(_, buffer)| buffer)
     }
 }
 

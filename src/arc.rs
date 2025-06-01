@@ -500,9 +500,10 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
     #[allow(clippy::type_complexity)]
     pub(crate) fn new_array<E: AllocErrorImpl, const N: usize>(
         array: [S::Item; N],
-    ) -> Result<(Self, NonNull<S::Item>), [S::Item; N]> {
+    ) -> Result<(Self, NonNull<S::Item>), (E, [S::Item; N])> {
         let array = ManuallyDrop::new(array);
-        unsafe { Self::new_unchecked::<E>(&array[..]) }.map_err(|_| ManuallyDrop::into_inner(array))
+        unsafe { Self::new_unchecked::<E>(&array[..]) }
+            .map_err(|err| (err, ManuallyDrop::into_inner(array)))
     }
 
     fn as_ptr(&self) -> *const () {
@@ -750,13 +751,13 @@ impl<S: Slice + ?Sized> Arc<S> {
         refcount: usize,
         vtable: &'static VTable,
         buffer: B,
-    ) -> Result<Box<ArcInner<B>>, B> {
+    ) -> Result<Box<ArcInner<B>>, (E, B)> {
         let vtable_ptr = ptr::from_ref(vtable);
         let layout = Layout::new::<ArcInner<B>>();
         // MSRV 1.65 let-else
         let ptr = match E::alloc::<_, true>(layout) {
             Ok(ptr) => ptr,
-            Err(_) => return Err(buffer),
+            Err(err) => return Err((err, buffer)),
         };
         let inner = ArcInner {
             refcount: AtomicUsize::new(refcount),
@@ -773,28 +774,29 @@ impl<S: Slice + ?Sized> Arc<S> {
     fn new_guard<B, E: AllocErrorImpl>(
         vtable: &'static VTable,
         buffer: B,
-    ) -> Result<ArcGuard<B>, B> {
+    ) -> Result<ArcGuard<B>, (E, B)> {
         Ok(ArcGuard(Box::into_non_null(Self::allocate_buffer::<_, E>(
             1, vtable, buffer,
         )?)))
     }
 
-    pub(crate) fn new_vec<E: AllocErrorImpl>(vec: S::Vec) -> Result<Self, S::Vec> {
+    pub(crate) fn new_vec<E: AllocErrorImpl>(vec: S::Vec) -> Result<Self, (E, S::Vec)> {
         if S::needs_drop() {
             let guard = Self::new_guard::<_, E>(vtable::new_vec::<S>(), FullVec::<S>::new(vec, ()))
-                .map_err(|b| b.buffer())?;
+                .map_err(|(err, b)| (err, b.buffer()))?;
             Ok(guard.into())
         } else {
             let len = vec.len();
             let guard = Self::new_guard::<_, E>(vtable::new_vec::<S>(), CompactVec::<S>::new(vec))
-                .map_err(|b| unsafe { b.to_vec(len) })?;
+                .map_err(|(err, b)| (err, unsafe { b.to_vec(len) }))?;
             Ok(guard.into())
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub(crate) fn new_buffer<B: DynBuffer + Buffer<S>, E: AllocErrorImpl>(
         buffer: B,
-    ) -> Result<(Self, NonNull<S::Item>, usize), B> {
+    ) -> Result<(Self, NonNull<S::Item>, usize), (E, B)> {
         let arc = Self::new_guard::<_, E>(vtable::new::<S, B>(), buffer)?;
         let (start, length) = arc.buffer().as_slice().to_raw_parts();
         Ok((arc.into(), start, length))
@@ -803,7 +805,7 @@ impl<S: Slice + ?Sized> Arc<S> {
     #[allow(clippy::type_complexity)]
     pub(crate) fn new_buffer_mut<B: DynBuffer + BufferMut<S>, E: AllocErrorImpl>(
         buffer: B,
-    ) -> Result<(Self, NonNull<S::Item>, usize, usize), B> {
+    ) -> Result<(Self, NonNull<S::Item>, usize, usize), (E, B)> {
         let mut arc = Self::new_guard::<_, E>(vtable::new_mut::<S, B>(), buffer)?;
         let (start, length) = arc.buffer_mut().as_slice_mut().to_raw_parts_mut();
         let capacity = arc.buffer_mut().capacity();
@@ -816,17 +818,18 @@ where {
         fn guard<S: Slice + ?Sized, B, E: AllocErrorImpl>(
             vtable: &'static VTable,
             buffer: B,
-        ) -> Result<PromoteGuard<S>, B> {
-            let arc = Arc::<S, true>::allocate_buffer::<_, E>(2, vtable, buffer)?;
+        ) -> Result<PromoteGuard<S>, E> {
+            let arc = Arc::<S, true>::allocate_buffer::<_, E>(2, vtable, buffer)
+                .map_err(|(err, b)| err.forget(b))?;
             Ok(PromoteGuard {
                 arc: Box::into_non_null(arc).cast(),
                 _phantom: PhantomData,
             })
         }
         if S::needs_drop() {
-            guard::<_, _, E>(vtable::new_vec::<S>(), FullVec::<S>::new(vec, ())).map_err(E::forget)
+            guard::<_, _, E>(vtable::new_vec::<S>(), FullVec::<S>::new(vec, ()))
         } else {
-            guard::<_, _, E>(vtable::new_vec::<S>(), CompactVec::<S>::new(vec)).map_err(E::forget)
+            guard::<_, _, E>(vtable::new_vec::<S>(), CompactVec::<S>::new(vec))
         }
     }
 }
