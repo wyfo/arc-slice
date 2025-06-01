@@ -32,7 +32,7 @@ impl Bytes {
     where
         T: AsRef<[u8]> + Send + 'static,
     {
-        Self(ArcBytes::from_buffer(AsRefBuffer::<_, false>(owner)))
+        Self(ArcBytes::from_buffer(AsRefBuffer(owner)))
     }
 
     pub const fn len(&self) -> usize {

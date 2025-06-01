@@ -620,17 +620,23 @@ unsafe impl<B: Any, M: Any> DynBuffer for BufferWithMetadata<B, M> {
 }
 
 #[derive(Debug, Clone)]
-pub struct AsRefBuffer<B, const UNIQUE: bool = true>(pub B);
+pub struct AsRefBuffer<B>(pub B);
 
-impl<S: ?Sized, B: AsRef<S> + Send + 'static, const UNIQUE: bool> Buffer<S>
-    for AsRefBuffer<B, UNIQUE>
-{
+impl<S: ?Sized, B: AsRef<S> + Send + 'static> Buffer<S> for AsRefBuffer<B> {
     fn as_slice(&self) -> &S {
         self.0.as_ref()
     }
 
     fn is_unique(&self) -> bool {
-        UNIQUE
+        false
+    }
+}
+
+impl<B: BorrowMetadata> BorrowMetadata for AsRefBuffer<B> {
+    type Metadata = B::Metadata;
+
+    fn borrow_metadata(&self) -> &Self::Metadata {
+        self.0.borrow_metadata()
     }
 }
 
