@@ -168,7 +168,7 @@ impl<S: Slice + ?Sized> CompactVec<S> {
             }
         }
         unsafe impl<S: Slice + ?Sized> BufferMut<S> for ArcCompactVec<S> {
-            fn as_slice_mut(&mut self) -> &mut S {
+            fn as_mut_slice(&mut self) -> &mut S {
                 unsafe { S::from_raw_parts_mut(self.arc.buffer.start, self.length) }
             }
             fn capacity(&self) -> usize {
@@ -295,7 +295,7 @@ pub(crate) mod vtable {
         }
         let (capacity, start) = unsafe {
             buffer.try_reserve_impl(offset, length, additional, allocate, |b| {
-                b.as_slice_mut().as_mut_ptr()
+                b.as_mut_slice().as_mut_ptr()
             })
         };
         (capacity, start.cast())
@@ -659,7 +659,7 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
                     }
                 }
                 unsafe impl<S: Slice + ?Sized> BufferMut<S> for ArcSlice<S> {
-                    fn as_slice_mut(&mut self) -> &mut S {
+                    fn as_mut_slice(&mut self) -> &mut S {
                         unsafe { S::from_raw_parts_mut(self.arc.slice_start(), self.length) }
                     }
                     fn capacity(&self) -> usize {
@@ -807,7 +807,7 @@ impl<S: Slice + ?Sized> Arc<S> {
         buffer: B,
     ) -> Result<(Self, NonNull<S::Item>, usize, usize), (E, B)> {
         let mut arc = Self::new_guard::<_, E>(vtable::new_mut::<S, B>(), buffer)?;
-        let (start, length) = arc.buffer_mut().as_slice_mut().to_raw_parts_mut();
+        let (start, length) = arc.buffer_mut().as_mut_slice().to_raw_parts_mut();
         let capacity = arc.buffer_mut().capacity();
         Ok((arc.into(), start, length, capacity))
     }

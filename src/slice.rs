@@ -33,7 +33,7 @@ use crate::{
     },
     error::{AllocError, AllocErrorImpl},
     layout::{AnyBufferLayout, DefaultLayout, FromLayout, Layout, LayoutMut, StaticLayout},
-    macros::{assume, is},
+    macros::is,
     slice_mut::{ArcSliceMutLayout, Data},
     utils::{
         debug_slice, lower_hex, panic_out_of_range, range_offset_len, subslice_offset_len,
@@ -476,7 +476,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn from_arc_slice_unchecked(slice: ArcSlice<[S::Item], L>) -> Self {
-        unsafe { assume!(S::try_from_slice(&slice).is_ok()) };
+        debug_assert!(S::try_from_slice(&slice).is_ok());
         let mut slice = ManuallyDrop::new(slice);
         Self {
             start: slice.start,

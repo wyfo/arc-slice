@@ -1,7 +1,7 @@
 use alloc::{string::String, vec::Vec};
 use core::{cmp, fmt, marker::PhantomData, ops::Deref};
 
-use serde::{de, de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     buffer::{Deserializable, Slice},
@@ -83,47 +83,35 @@ where
     type Value = T;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str(S::expected())
+        S::expecting(formatter)
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
-        E: Error,
+        E: de::Error,
     {
-        match S::deserialize_from_str(v) {
-            Some(s) => Ok(T::from_slice(s)),
-            None => Err(de::Error::invalid_type(de::Unexpected::Str(v), &self)),
-        }
+        S::deserialize_from_str(v).map(T::from_slice)
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
     where
-        E: Error,
+        E: de::Error,
     {
-        match S::deserialize_from_string(v) {
-            Ok(s) => Ok(T::from_vec(s)),
-            Err(v) => Err(de::Error::invalid_type(de::Unexpected::Str(&v), &self)),
-        }
+        S::deserialize_from_string(v).map(T::from_vec)
     }
 
     fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        match S::deserialize_from_bytes(v) {
-            Some(slice) => Ok(T::from_slice(slice)),
-            None => Err(de::Error::invalid_type(de::Unexpected::Bytes(v), &self)),
-        }
+        S::deserialize_from_bytes(v).map(T::from_slice)
     }
 
     fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        match S::deserialize_from_byte_buf(v) {
-            Ok(vec) => Ok(T::from_vec(vec)),
-            Err(v) => Err(de::Error::invalid_type(de::Unexpected::Bytes(&v), &self)),
-        }
+        S::deserialize_from_byte_buf(v).map(T::from_vec)
     }
 
     fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>

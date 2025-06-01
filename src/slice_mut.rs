@@ -393,17 +393,19 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
 
     #[allow(clippy::type_complexity)]
     pub fn try_from_arc_slice_mut(
-        slice: ArcSliceMut<[S::Item], L, UNIQUE>,
+        mut slice: ArcSliceMut<[S::Item], L, UNIQUE>,
     ) -> Result<Self, (S::TryFromSliceError, ArcSliceMut<[S::Item], L, UNIQUE>)> {
-        match S::try_from_slice(&slice) {
+        match S::try_from_slice_mut(&mut slice) {
             Ok(_) => Ok(unsafe { Self::from_arc_slice_mut_unchecked(slice) }),
             Err(error) => Err((error, slice)),
         }
     }
 
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe fn from_arc_slice_mut_unchecked(slice: ArcSliceMut<[S::Item], L, UNIQUE>) -> Self {
-        unsafe { assume!(S::try_from_slice(&slice).is_ok()) };
+    pub unsafe fn from_arc_slice_mut_unchecked(
+        mut slice: ArcSliceMut<[S::Item], L, UNIQUE>,
+    ) -> Self {
+        debug_assert!(S::try_from_slice_mut(&mut slice).is_ok());
         let slice = ManuallyDrop::new(slice);
         Self {
             start: slice.start,

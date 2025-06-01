@@ -1,7 +1,7 @@
 #[cfg(feature = "serde")]
 use alloc::string::String;
 use alloc::{boxed::Box, vec::Vec};
-use core::convert::Infallible;
+use core::{convert::Infallible, fmt::Formatter};
 
 use bstr::{BStr, BString, ByteSlice};
 
@@ -48,6 +48,9 @@ unsafe impl Slice for BStr {
     fn try_from_slice(slice: &[Self::Item]) -> Result<&Self, Self::TryFromSliceError> {
         Ok(slice.as_bstr())
     }
+    fn try_from_slice_mut(slice: &mut [Self::Item]) -> Result<&mut Self, Self::TryFromSliceError> {
+        Ok(slice.as_bstr_mut())
+    }
 }
 
 unsafe impl Emptyable for BStr {}
@@ -63,26 +66,26 @@ unsafe impl Concatenable for BStr {}
 unsafe impl Extendable for BStr {}
 
 #[cfg(feature = "serde")]
-unsafe impl Deserializable for BStr {
+impl Deserializable for BStr {
     fn deserialize<'de, D: serde::Deserializer<'de>, V: serde::de::Visitor<'de>>(
         deserializer: D,
         visitor: V,
     ) -> Result<V::Value, D::Error> {
         deserializer.deserialize_byte_buf(visitor)
     }
-    fn expected() -> &'static str {
-        "bytes"
+    fn expecting(f: &mut Formatter) -> core::fmt::Result {
+        write!(f, "a byte string")
     }
-    fn deserialize_from_bytes(bytes: &[u8]) -> Option<&Self> {
-        Some(bytes.into())
-    }
-    fn deserialize_from_byte_buf(bytes: Vec<u8>) -> Result<Self::Vec, Vec<u8>> {
+    fn deserialize_from_bytes<E: serde::de::Error>(bytes: &[u8]) -> Result<&Self, E> {
         Ok(bytes.into())
     }
-    fn deserialize_from_str(s: &str) -> Option<&Self> {
-        Some(s.into())
+    fn deserialize_from_byte_buf<E: serde::de::Error>(bytes: Vec<u8>) -> Result<Self::Vec, E> {
+        Ok(bytes.into())
     }
-    fn deserialize_from_string(s: String) -> Result<Self::Vec, String> {
+    fn deserialize_from_str<E: serde::de::Error>(s: &str) -> Result<&Self, E> {
+        Ok(s.into())
+    }
+    fn deserialize_from_string<E: serde::de::Error>(s: String) -> Result<Self::Vec, E> {
         Ok(s.into())
     }
     fn try_deserialize_from_seq() -> bool {
@@ -97,7 +100,7 @@ impl Buffer<BStr> for BString {
 }
 
 unsafe impl BufferMut<BStr> for BString {
-    fn as_slice_mut(&mut self) -> &mut BStr {
+    fn as_mut_slice(&mut self) -> &mut BStr {
         self.as_bstr_mut()
     }
 

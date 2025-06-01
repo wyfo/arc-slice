@@ -2,6 +2,7 @@ use core::fmt;
 
 pub(crate) use private::AllocErrorImpl;
 
+/// The memory allocator returned an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllocError;
 
@@ -11,11 +12,18 @@ impl fmt::Display for AllocError {
     }
 }
 
+/// Error which can occur when trying to reserve additional capacity for a mutable buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TryReserveError {
+    /// The buffer reference is not unique.
+    ///
+    /// It may occur when the same buffer is reference by multiple `ArcSliceMut`.
     NotUnique,
+    /// The buffer doesn't support reservation.
     Unsupported,
+    /// The memory allocator returned an error.
     AllocError,
+    /// The required capacity exceeds the buffer maximum (usually isize::MAX bytes).
     CapacityOverflow,
 }
 
