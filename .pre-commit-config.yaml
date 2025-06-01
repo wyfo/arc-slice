@@ -38,7 +38,7 @@ repos:
         types_or: [rust, toml]
       - id: unreachable-checked
         name: unreachable-checked
-        entry: RUSTFLAGS=--cfg=unreachable_checked cargo build --manifest-path=bytes/Cargo.toml --tests --release
+        entry: env RUSTFLAGS=--cfg=unreachable_checked cargo build --manifest-path=bytes/Cargo.toml --tests --release
         language: rust
         pass_filenames: false
         types_or: [rust, toml]
