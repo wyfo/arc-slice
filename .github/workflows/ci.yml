@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: fmt
+        run: cargo fmt -- --config "unstable_features=true,imports_granularity=Crate,group_imports=StdExternalCrate,format_code_in_doc_comments=true"
+      - uses: taiki-e/install-action@cargo-hack
+      - name: clippy
+        run: cargo hack clippy --feature-powerset --no-dev-deps --exclude-features default-layout-any-buffer,default-layout-static,default-layout-boxed-slice,default-layout-raw,default-layout-vec,default-layout-mut-any-buffer,default-layout-vec --depth 2 -- -D warnings
+      - name: unreachable_checked
+        run: cargo build --manifest-path=bytes/Cargo.toml --tests --release
+        env:
+          RUSTFLAGS: --cfg=unreachable_checked
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install miri
+        run: rustup install nightly && rustup +nightly component add miri
+      - name: miri
+        run: cargo +nightly miri test
+      - name: miri many-seeds
+        run: cargo +nightly miri test --test concurrency --many-seeds
+        env:
+          MIRIFLAGS: -Zmiri-many-seeds
+      - name: miri bytes
+        run: cargo +nightly miri test --manifest-path=bytes/Cargo.toml --test test_bytes

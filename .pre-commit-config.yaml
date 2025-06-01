@@ -24,21 +24,3 @@ repos:
         language: rust
         pass_filenames: false
         types_or: [rust, toml]
-      - id: test
-        name: test
-        entry: cargo test --all-features
-        language: rust
-        pass_filenames: false
-        types_or: [rust, toml]
-      - id: test-bytes
-        name: test-bytes
-        entry: cargo test --manifest-path bytes/Cargo.toml --test test_bytes
-        language: rust
-        pass_filenames: false
-        types_or: [rust, toml]
-      - id: unreachable-checked
-        name: unreachable-checked
-        entry: env RUSTFLAGS=--cfg=unreachable_checked cargo build --manifest-path=bytes/Cargo.toml --tests --release
-        language: rust
-        pass_filenames: false
-        types_or: [rust, toml]
