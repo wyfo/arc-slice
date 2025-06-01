@@ -76,3 +76,15 @@ dbg_macro = "forbid"
 semicolon_if_nothing_returned = "forbid"
 incompatible_msrv = "allow"
 #undocumented_unsafe_blocks = "forbid"
+
+[package.metadata.docs.rs]
+features = [
+  "bstr",
+  "bytemuck",
+  "bytes",
+  "inlined",
+  "portable-atomic",
+  "portable-atomic-util",
+  "raw-buffer",
+  "serde",
+]

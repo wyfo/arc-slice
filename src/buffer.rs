@@ -148,7 +148,7 @@ pub unsafe trait Subsliceable: Slice {
     ///
     /// # Safety
     ///
-    /// `start..end` must be a valid range of the item slice returned by [`Self::to_slice`].
+    /// `start..end` must be a valid range of the item slice returned by [`Slice::to_slice`].
     unsafe fn check_subslice(&self, start: usize, end: usize);
     /// Same as `self.check_subslice(offset, self.to_slice().len())`.
     ///
@@ -495,6 +495,7 @@ impl<S: Slice + ?Sized, B: Buffer<S>> BufferExt<S> for B {}
 ///
 /// [`as_mut_slice`]: Self::as_mut_slice
 /// [`capacity`]: Self::capacity
+/// [`set_len`]: Self::set_len
 /// [`try_reserve`]: Self::try_reserve
 /// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
 #[allow(clippy::len_without_is_empty)]
@@ -643,6 +644,8 @@ impl<S: Slice + ?Sized, B: BufferMut<S>> BufferMutExt<S> for B {}
 #[cfg(feature = "raw-buffer")]
 /// A buffer that can be stored into a raw pointer.
 ///
+/// The trait can be used when the actual buffer is already stored in an [`Arc`].
+///
 /// # Safety
 ///
 /// - The slice returned by [`Buffer::as_slice`] must not be invalidated by
@@ -650,6 +653,7 @@ impl<S: Slice + ?Sized, B: BufferMut<S>> BufferMutExt<S> for B {}
 /// - [`from_raw`] must be pure, i.e. `mem::forget(S::from_raw(ptr))` should not
 ///   invalidate memory behind ptr.
 ///
+/// [`Arc`]: alloc::sync::Arc
 /// [`into_raw`]: Self::into_raw
 /// [`from_raw`]: Self::from_raw
 pub unsafe trait RawBuffer<S: ?Sized>: Buffer<S> + Clone {
