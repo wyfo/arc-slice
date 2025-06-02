@@ -34,8 +34,12 @@
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let path = Path::new("README.md").to_owned();
+//! # #[cfg(not(miri))]
 //! let file = File::open(&path)?;
+//! # #[cfg(not(miri))]
 //! let mmap = unsafe { Mmap::map(&file)? };
+//! # #[cfg(miri)]
+//! # let mmap = b"# arc-slice".to_vec();
 //!
 //! let bytes: ArcBytes<ArcLayout<true>> =
 //!     ArcBytes::from_buffer_with_metadata(AsRefBuffer(mmap), path);
