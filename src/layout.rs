@@ -14,9 +14,10 @@
 //!   of boxed slice/vector buffers, with a low probability of clone;
 //! - [`RawLayout`] should be used with [`Arc`] and other raw buffers.
 //!
-//! It is recommended for libraries to use the default layout or a generic one in public API;
-//! they should not override the default layout using [crate features], excepted for [`ArcLayout`]
-//! generic parameters if really necessary.
+//! As layout mostly impacts [`ArcSlice`]/[`ArcSliceMut`] instantiation, libraries should not
+//! really care about it, and either accept the default layout or a generic one in public API;
+//! they can expose the best suited layout in return position. Libraries should not override
+//! the default layout using [crate features].
 //! <br>
 //! Binaries should use the default layout, adapting it to the use case using [crate features].
 //!

@@ -12,35 +12,19 @@ A utility library for working with shared slices of memory.
 ## Example
 
 ```rust
-use arc_slice::ArcSlice;
+use arc_slice::{ArcSlice, ArcSliceMut};
 
-let mut bytes = <ArcSlice<u8>>::new(b"Hello world");
-let a = bytes.subslice(0..5);
+let mut bytes_mut: ArcSliceMut<[u8]> = ArcSliceMut::new();
+bytes_mut.extend_from_slice(b"Hello world");
 
+let mut bytes: ArcSlice<[u8]> = bytes_mut.freeze();
+
+let a: ArcSlice<[u8]> = bytes.subslice(0..5);
 assert_eq!(a, b"Hello");
 
-let b = bytes.split_to(6);
-
+let b: ArcSlice<[u8]> = bytes.split_to(6);
 assert_eq!(bytes, b"world");
 assert_eq!(b, b"Hello ");
-```
-
-Using `arc-slice` with shared memory:
-```rust
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
-
-use arc_slice::{buffer::AsRefBuffer, ArcBytes};
-use memmap2::Mmap;
-
-let path = Path::new("README.md");
-let file = File::open(path)?;
-let mmap = unsafe { Mmap::map(&file)? };
-let bytes = <ArcBytes>::from_buffer_with_metadata(AsRefBuffer(mmap), path.to_owned());
-
-assert_eq!(bytes.metadata::<PathBuf>().unwrap(), path);
 ```
 
 ## *Disclaimer*
@@ -82,8 +66,6 @@ It can allow to test `arc-slice` implementation, to check if it can perform bett
 This library uses unsafe code. It is tested with [miri](https://github.com/rust-lang/miri) to ensure the memory safety and the correct synchronization.
 
 
-[^1]: Only two tests are not passing, but it is just about the capacity of a reallocated `BytesMut` for which you cannot reserve because it is shared. I don't really agree with `bytes` behavior here — doubling the previous capacity, even if it's about a small reservation in a small subslice — so I will not say it matters a lot. If it does matter, it is still possible to match `bytes` behavior. 
+[^1]: Only four tests are not passing: one about the memory size being 3 instead of 4, another one because `BytesMut::with_capacity` doesn't allocate a `Vec`, and the last two about the capacity of a reallocated `BytesMut` for which you cannot reserve because it is shared. I don't really agree with `bytes` behavior here — doubling the previous capacity, even if it's about a small reservation in a small subslice — so I will not say it matters a lot. If it does matter, it is still possible to match `bytes` behavior. 
 
 [^2]: At the time when I started to draft this crate, during summer 2024, `Bytes::from_owner` didn't exist, https://github.com/tokio-rs/bytes/issues/437 was a bit staled, and that was actually my first motivation to start this work.
-
-[^3]: In earlier version, `try_reserve` also exposed memory allocation failure in the error, but it has been simplified. I'm still thinking about a design where all memory allocation failures, including arc allocation, would be exposed, but it's not ready yet.

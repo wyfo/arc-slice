@@ -1,4 +1,49 @@
-//! TODO
+//! A utility library for working with shared slices of memory.
+//!
+//! The crate provides efficient shared buffer implementations [`ArcSlice`]/[`ArcSliceMut`].
+//!
+//! ```rust
+//! use arc_slice::{ArcSlice, ArcSliceMut};
+//!
+//! # fn main() {
+//! let mut bytes_mut: ArcSliceMut<[u8]> = ArcSliceMut::new();
+//! bytes_mut.extend_from_slice(b"Hello world");
+//!
+//! let mut bytes: ArcSlice<[u8]> = bytes_mut.freeze();
+//!
+//! let a: ArcSlice<[u8]> = bytes.subslice(0..5);
+//! assert_eq!(a, b"Hello");
+//!
+//! let b: ArcSlice<[u8]> = bytes.split_to(6);
+//! assert_eq!(bytes, b"world");
+//! assert_eq!(b, b"Hello ");
+//! }
+//! ```
+//!
+//! Depending on its [layout], [`ArcSlice`] can also support arbitrary buffer, e.g. shared memory,
+//! and provides optional metadata that can be attached to the buffer.
+//!
+//! ```rust
+//! use std::{
+//!     fs::File,
+//!     path::{Path, PathBuf},
+//! };
+//!
+//! use arc_slice::{buffer::AsRefBuffer, layout::ArcLayout, ArcBytes};
+//! use memmap2::Mmap;
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let path = Path::new("README.md").to_owned();
+//! let file = File::open(&path)?;
+//! let mmap = unsafe { Mmap::map(&file)? };
+//!
+//! let bytes: ArcBytes<ArcLayout<true>> =
+//!     ArcBytes::from_buffer_with_metadata(AsRefBuffer(mmap), path);
+//! assert!(bytes.starts_with(b"# arc-slice"));
+//! assert_eq!(bytes.metadata::<PathBuf>().unwrap(), Path::new("README.md"));
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! ## Features
 //!
