@@ -20,11 +20,7 @@ use crate::layout::{
     ArcLayout, BoxedSliceLayout, CloneNoAllocLayout, TruncateNoAllocLayout, VecLayout,
 };
 #[allow(unused_imports)]
-use crate::msrv::ConstPtrExt;
-#[allow(unused_imports)]
-use crate::msrv::{ptr, NonNullExt, StrictProvenance};
-#[cfg(feature = "serde")]
-use crate::utils::assert_checked;
+use crate::msrv::{ptr, ConstPtrExt, NonNullExt, StrictProvenance};
 use crate::{
     arc::Arc,
     buffer::{
@@ -213,7 +209,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     #[cfg(feature = "serde")]
     pub(crate) fn new_bytes(slice: &S) -> Self {
-        assert_checked(is!(S::Item, u8));
         let (start, length) = slice.to_raw_parts();
         if let Some(empty) = ArcSlice::new_empty(start, length) {
             return empty;
@@ -226,7 +221,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     #[cfg(feature = "serde")]
     pub(crate) fn new_byte_vec(vec: S::Vec) -> Self {
-        assert_checked(is!(S::Item, u8));
         if !L::ANY_BUFFER {
             return Self::new_bytes(ManuallyDrop::new(vec).as_slice());
         }
@@ -270,26 +264,23 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     where
         S: Subsliceable,
     {
-        let (offset, len) = range_offset_len(self.as_slice(), range);
-        unsafe { self.borrow_impl(offset, len) }
+        unsafe { self.borrow_impl(range_offset_len(self.as_slice(), range)) }
     }
 
     pub fn borrow_from_ref(&self, subset: &S) -> ArcSliceBorrow<S, L>
     where
         S: Subsliceable,
     {
-        let (offset, len) = subslice_offset_len(self.as_slice(), subset);
-        unsafe { self.borrow_impl(offset, len) }
+        unsafe { self.borrow_impl(subslice_offset_len(self.as_slice(), subset)) }
     }
 
-    pub(crate) unsafe fn borrow_impl(&self, offset: usize, len: usize) -> ArcSliceBorrow<S, L>
+    unsafe fn borrow_impl(&self, (offset, len): (usize, usize)) -> ArcSliceBorrow<S, L>
     where
         S: Subsliceable,
     {
         ArcSliceBorrow {
-            slice: unsafe {
-                S::from_slice_unchecked(self.to_slice().get_unchecked(offset..offset + len))
-            },
+            start: unsafe { self.start.add(offset) },
+            length: len,
             ptr: L::borrowed_data::<S>(&self.data).unwrap_or_else(|| ptr::from_ref(self).cast()),
             _phantom: PhantomData,
         }
@@ -1002,9 +993,9 @@ const _: () = {
     }
 };
 
-#[derive(Clone, Copy)]
 pub struct ArcSliceBorrow<'a, S: Slice + ?Sized, L: Layout = DefaultLayout> {
-    slice: &'a S,
+    start: NonNull<S::Item>,
+    length: usize,
     ptr: *const (),
     _phantom: PhantomData<&'a ArcSlice<S, L>>,
 }
@@ -1012,11 +1003,19 @@ pub struct ArcSliceBorrow<'a, S: Slice + ?Sized, L: Layout = DefaultLayout> {
 unsafe impl<S: Slice + ?Sized, L: Layout> Send for ArcSliceBorrow<'_, S, L> {}
 unsafe impl<S: Slice + ?Sized, L: Layout> Sync for ArcSliceBorrow<'_, S, L> {}
 
+impl<S: Slice + ?Sized, L: Layout> Clone for ArcSliceBorrow<'_, S, L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S: Slice + ?Sized, L: Layout> Copy for ArcSliceBorrow<'_, S, L> {}
+
 impl<S: Slice + ?Sized, L: Layout> Deref for ArcSliceBorrow<'_, S, L> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
-        self.slice
+        self.as_slice()
     }
 }
 
@@ -1026,11 +1025,10 @@ impl<S: fmt::Debug + Slice + ?Sized, L: Layout> fmt::Debug for ArcSliceBorrow<'_
     }
 }
 
-impl<S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'_, S, L> {
+impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
     #[allow(clippy::wrong_self_convention)]
-    fn to_owned_impl<E: AllocErrorImpl>(self) -> Result<ArcSlice<S, L>, E> {
-        let (start, length) = self.slice.to_raw_parts();
-        if let Some(empty) = ArcSlice::new_empty(start, length) {
+    fn clone_arc_impl<E: AllocErrorImpl>(self) -> Result<ArcSlice<S, L>, E> {
+        if let Some(empty) = ArcSlice::new_empty(self.start, self.length) {
             return Ok(empty);
         }
         let clone = || {
@@ -1039,14 +1037,44 @@ impl<S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'_, S, L> {
         };
         let data = L::clone_borrowed_data::<S>(self.ptr).map_or_else(clone, Ok)?;
         Ok(ArcSlice {
-            start,
-            length,
+            start: self.start,
+            length: self.length,
             data: ManuallyDrop::new(data),
         })
     }
 
-    pub fn try_to_owned(self) -> Result<ArcSlice<S, L>, AllocError> {
-        self.to_owned_impl::<AllocError>()
+    pub fn try_clone_arc(self) -> Result<ArcSlice<S, L>, AllocError> {
+        self.clone_arc_impl::<AllocError>()
+    }
+
+    pub fn as_slice(&self) -> &'a S {
+        unsafe { S::from_raw_parts(self.start, self.length) }
+    }
+
+    pub fn reborrow(&self, range: impl RangeBounds<usize>) -> ArcSliceBorrow<'a, S, L>
+    where
+        S: Subsliceable,
+    {
+        unsafe { self.reborrow_impl(range_offset_len(self.as_slice(), range)) }
+    }
+
+    pub fn reborrow_from_ref(&self, subset: &S) -> ArcSliceBorrow<'a, S, L>
+    where
+        S: Subsliceable,
+    {
+        unsafe { self.reborrow_impl(subslice_offset_len(self.as_slice(), subset)) }
+    }
+
+    unsafe fn reborrow_impl(&self, (offset, len): (usize, usize)) -> ArcSliceBorrow<'a, S, L>
+    where
+        S: Subsliceable,
+    {
+        ArcSliceBorrow {
+            start: unsafe { self.start.add(offset) },
+            length: len,
+            ptr: self.ptr,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -1056,7 +1084,8 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > ArcSliceBorrow<'_, S, L>
 {
-    pub fn to_owned(self) -> ArcSlice<S, L> {
-        self.to_owned_impl::<Infallible>().unwrap_checked()
+    #[allow(clippy::should_implement_trait)]
+    pub fn clone_arc(self) -> ArcSlice<S, L> {
+        self.clone_arc_impl::<Infallible>().unwrap_checked()
     }
 }
