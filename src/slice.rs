@@ -901,21 +901,28 @@ impl<L: Layout> PartialEq<ArcSlice<str, L>> for String {
 }
 
 #[cfg(feature = "oom-handling")]
-impl<'a, S: Slice + ?Sized, L: Layout> From<&'a S> for ArcSlice<S, L>
+impl<S: Slice + ?Sized, L: Layout> From<&S> for ArcSlice<S, L>
 where
     S::Item: Copy,
 {
-    fn from(value: &'a S) -> Self {
+    fn from(value: &S) -> Self {
         Self::from_slice(value)
     }
 }
 
 #[cfg(feature = "oom-handling")]
-impl<'a, T: Copy + Send + Sync + 'static, L: Layout, const N: usize> From<&'a [T; N]>
+impl<T: Copy + Send + Sync + 'static, L: Layout, const N: usize> From<&[T; N]>
     for ArcSlice<[T], L>
 {
-    fn from(value: &'a [T; N]) -> Self {
+    fn from(value: &[T; N]) -> Self {
         Self::from_slice(value)
+    }
+}
+
+#[cfg(feature = "oom-handling")]
+impl<T: Send + Sync + 'static, L: Layout, const N: usize> From<[T; N]> for ArcSlice<[T], L> {
+    fn from(value: [T; N]) -> Self {
+        Self::from_array(value)
     }
 }
 

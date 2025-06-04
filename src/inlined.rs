@@ -414,6 +414,21 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
     }
 }
 
+impl<L: Layout> SmallArcSlice<[u8], L> {
+    #[cfg(feature = "oom-handling")]
+    pub fn from_array<const N: usize>(array: [u8; N]) -> Self {
+        SmallSlice::new(array.as_slice())
+            .map_or_else(|| ArcSlice::from_array(array).into(), Into::into)
+    }
+
+    pub fn try_from_array<const N: usize>(array: [u8; N]) -> Result<Self, [u8; N]> {
+        SmallSlice::new(array.as_slice()).map_or_else(
+            || Ok(ArcSlice::try_from_array(array)?.into()),
+            |a| Ok(a.into()),
+        )
+    }
+}
+
 impl<
         S: Slice<Item = u8> + ?Sized,
         #[cfg(feature = "oom-handling")] L: Layout,
@@ -618,6 +633,27 @@ impl<L: Layout> PartialEq<SmallArcSlice<[u8], L>> for Vec<u8> {
 impl<L: Layout> PartialEq<SmallArcSlice<str, L>> for String {
     fn eq(&self, other: &SmallArcSlice<str, L>) -> bool {
         **self == **other
+    }
+}
+
+#[cfg(feature = "oom-handling")]
+impl<S: Slice<Item = u8> + ?Sized, L: AnyBufferLayout> From<&S> for SmallArcSlice<S, L> {
+    fn from(value: &S) -> Self {
+        Self::from_slice(value)
+    }
+}
+
+#[cfg(feature = "oom-handling")]
+impl<L: AnyBufferLayout, const N: usize> From<&[u8; N]> for SmallArcSlice<[u8], L> {
+    fn from(value: &[u8; N]) -> Self {
+        Self::from_slice(value)
+    }
+}
+
+#[cfg(feature = "oom-handling")]
+impl<L: AnyBufferLayout, const N: usize> From<[u8; N]> for SmallArcSlice<[u8], L> {
+    fn from(value: [u8; N]) -> Self {
+        Self::from_array(value)
     }
 }
 

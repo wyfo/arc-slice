@@ -1014,12 +1014,28 @@ impl<L: LayoutMut, const UNIQUE: bool> PartialEq<ArcSliceMut<str, L, UNIQUE>> fo
 }
 
 #[cfg(feature = "oom-handling")]
-impl<'a, S: Slice + ?Sized, L: LayoutMut> From<&'a S> for ArcSliceMut<S, L>
+impl<S: Slice + ?Sized, L: LayoutMut> From<&S> for ArcSliceMut<S, L>
 where
     S::Item: Copy,
 {
-    fn from(value: &'a S) -> Self {
+    fn from(value: &S) -> Self {
         Self::from_slice(value)
+    }
+}
+
+#[cfg(feature = "oom-handling")]
+impl<T: Copy + Send + Sync + 'static, L: LayoutMut, const N: usize> From<&[T; N]>
+    for ArcSliceMut<[T], L>
+{
+    fn from(value: &[T; N]) -> Self {
+        Self::from_slice(value)
+    }
+}
+
+#[cfg(feature = "oom-handling")]
+impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize> From<[T; N]> for ArcSliceMut<[T], L> {
+    fn from(value: [T; N]) -> Self {
+        Self::from_array(value)
     }
 }
 
