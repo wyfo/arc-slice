@@ -64,6 +64,8 @@ impl VecLayout {
 }
 
 unsafe impl ArcSliceMutLayout for VecLayout {
+    const ANY_BUFFER: bool = true;
+
     unsafe fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
         vec: S::Vec,
         offset: usize,

@@ -46,7 +46,7 @@ mod vec;
 #[allow(clippy::missing_safety_doc)]
 pub unsafe trait ArcSliceLayout: 'static {
     type Data;
-    const ANY_BUFFER: bool = true;
+    const ANY_BUFFER: bool;
     const STATIC_DATA: Option<Self::Data>;
     // MSRV 1.83 const `Option::unwrap`
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data>;

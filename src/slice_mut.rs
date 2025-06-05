@@ -72,7 +72,7 @@ pub(crate) type TryReserveResult<T> = (Result<usize, TryReserveError>, NonNull<T
 
 #[allow(clippy::missing_safety_doc)]
 pub unsafe trait ArcSliceMutLayout {
-    const ANY_BUFFER: bool = true;
+    const ANY_BUFFER: bool;
     fn try_data_from_arc<S: Slice + ?Sized, const ANY_BUFFER: bool>(
         arc: ManuallyDrop<Arc<S, ANY_BUFFER>>,
     ) -> Option<Data> {
