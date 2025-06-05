@@ -300,7 +300,7 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
             Data::Static => (length == 0).then_some((0, None)),
             Data::Arc(mut arc) => Some((
                 unsafe { arc.capacity(start)? },
-                Some(ManuallyDrop::into_inner(arc).into()),
+                Some(L2::try_data_from_arc(arc)?),
             )),
             Data::Capacity(capacity) => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };

@@ -30,8 +30,10 @@ use crate::{
 ///
 /// # Safety
 ///
-/// [`into_vec`](Self::into_vec) must be pure, i.e. `mem::forget(S::into_vec(ptr::read(vec_ptr)))`
-/// should not invalidate memory behind `vec_ptr`.
+/// - [`into_vec`](Self::into_vec) must be pure, i.e. `mem::forget(S::into_vec(ptr::read(vec_ptr)))`
+///   should not invalidate memory behind `vec_ptr`.
+/// - If [`try_from_slice_mut`](Self::try_from_slice_mut) returns `Ok`, then
+///   [`try_from_slice`](Self::try_from_slice) must also return `Ok` for the same slice.
 pub unsafe trait Slice: Send + Sync + 'static {
     /// The slice item, e.g. `T` for `[T]` or `u8` for `str`.
     type Item: Send + Sync + 'static;

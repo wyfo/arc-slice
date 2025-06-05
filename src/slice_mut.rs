@@ -25,7 +25,7 @@ use crate::{
         Emptyable, Extendable, Slice, SliceExt, Zeroable,
     },
     error::{AllocError, AllocErrorImpl, TryReserveError},
-    layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, LayoutMut},
+    layout::{AnyBufferLayout, DefaultLayoutMut, FromLayout, Layout, LayoutMut},
     macros::{assume, is},
     msrv::{ptr, NonZero},
     slice::ArcSliceLayout,
@@ -128,7 +128,7 @@ pub unsafe trait ArcSliceMutLayout {
         length: usize,
         capacity: usize,
         data: Data,
-    ) -> Result<L::Data, E>;
+    ) -> Option<L::Data>;
     fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,
@@ -340,22 +340,29 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         unsafe { mem::transmute::<Self, ArcSliceMut<S, L, false>>(self) }
     }
 
-    fn freeze_impl<L2: FromLayout<L>, E: AllocErrorImpl>(self) -> Result<ArcSlice<S, L2>, Self> {
-        let this = ManuallyDrop::new(self);
+    fn freeze_impl<L2: Layout, E: AllocErrorImpl>(self) -> Result<ArcSlice<S, L2>, Self> {
+        let mut this = ManuallyDrop::new(self);
         let data = match this.data {
             Some(data) => L::frozen_data::<S, L2, E>(this.start, this.length, this.capacity, data),
-            None => {
+            None if L2::STATIC_DATA.is_some() || L2::ANY_BUFFER => {
                 L2::data_from_static::<_, E>(unsafe { S::from_raw_parts(this.start, this.length) })
-                    .map_err(|(err, _)| err)
+                    .ok()
             }
+            None => match Arc::new_array::<E, 0>([]) {
+                Ok((arc, start)) => {
+                    this.start = start;
+                    Some(L2::data_from_arc_slice::<S>(arc))
+                }
+                Err(_) => None,
+            },
         };
         match data {
-            Ok(data) => Ok(ArcSlice::init(this.start, this.length, data)),
-            Err(_) => Err(ManuallyDrop::into_inner(this)),
+            Some(data) => Ok(ArcSlice::init(this.start, this.length, data)),
+            None => Err(ManuallyDrop::into_inner(this)),
         }
     }
 
-    pub fn try_freeze<L2: FromLayout<L>>(self) -> Result<ArcSlice<S, L2>, Self> {
+    pub fn try_freeze<L2: Layout>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.freeze_impl::<L2, AllocError>()
     }
 

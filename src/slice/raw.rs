@@ -307,7 +307,7 @@ unsafe impl ArcSliceLayout for RawLayout {
         match arc_or_vtable::<S>(**data) {
             ArcOrVTable::Arc(mut arc) => Some((
                 unsafe { arc.capacity(start)? },
-                Some(ManuallyDrop::into_inner(arc).into()),
+                Some(L::try_data_from_arc(arc)?),
             )),
             ArcOrVTable::Vtable { ptr, vtable } => {
                 let capacity = unsafe { (vtable.capacity)(ptr, start.cast()) };

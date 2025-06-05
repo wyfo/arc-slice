@@ -152,7 +152,7 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         match Self::arc::<S>(data) {
             Some(mut arc) => Some((
                 unsafe { arc.capacity(start)? },
-                Some(ManuallyDrop::into_inner(arc).into()),
+                Some(L::try_data_from_arc(arc)?),
             )),
             None => (length == 0).then_some((0, None)),
         }

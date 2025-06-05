@@ -105,10 +105,8 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceMutLayout
         _length: usize,
         _capacity: usize,
         data: Data,
-    ) -> Result<L::Data, E> {
-        Ok(L::data_from_arc(ManuallyDrop::into_inner(
-            data.into_arc::<S, ANY_BUFFER>(),
-        )))
+    ) -> Option<L::Data> {
+        L::try_data_from_arc(data.into_arc::<S, ANY_BUFFER>())
     }
 
     fn update_layout<S: Slice + ?Sized, L: ArcSliceMutLayout, E: AllocErrorImpl>(

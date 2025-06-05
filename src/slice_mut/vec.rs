@@ -210,13 +210,14 @@ unsafe impl ArcSliceMutLayout for VecLayout {
         length: usize,
         capacity: usize,
         data: Data,
-    ) -> Result<L::Data, E> {
+    ) -> Option<L::Data> {
         match Self::offset_or_arc::<S>(data) {
-            OffsetOrArc::Arc(arc) => Ok(L::data_from_arc(ManuallyDrop::into_inner(arc))),
-            OffsetOrArc::Offset(offset) => {
+            OffsetOrArc::Arc(arc) => L::try_data_from_arc(arc),
+            OffsetOrArc::Offset(offset) if L::ANY_BUFFER => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) };
-                L::data_from_vec::<S, E>(vec).map_err(|(err, v)| err.forget(v))
+                L::data_from_vec::<S, E>(vec).map_err(mem::forget).ok()
             }
+            OffsetOrArc::Offset(_) => None,
         }
     }
 

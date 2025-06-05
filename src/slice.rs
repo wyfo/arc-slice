@@ -663,7 +663,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         self.split_to_impl::<AllocError>(at)
     }
 
-    pub fn try_into_mut<L2: LayoutMut + FromLayout<L>>(self) -> Result<ArcSliceMut<S, L2>, Self> {
+    pub fn try_into_mut<L2: LayoutMut>(self) -> Result<ArcSliceMut<S, L2>, Self> {
         let mut this = ManuallyDrop::new(self);
         match unsafe { L::mut_data::<S, L2>(this.start, this.length, &mut this.data) } {
             Some((capacity, data)) => {
