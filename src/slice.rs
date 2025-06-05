@@ -161,6 +161,21 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
+    /// Creates a new empty `ArcSlice`.
+    ///
+    /// This operation doesn't allocate; it is roughly equivalent to `ArcSlice::from_static(&[])`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// #[cfg(feature = "default-layout-static")]
+    /// let s = ArcSlice::<[u8]>::new();
+    /// # #[cfg(not(feature = "default-layout-static"))]
+    /// # let s = ArcSlice::<[u8], arc_slice::layout::VecLayout>::new();
+    /// assert_eq!(s, b"");
+    /// ```
     pub const fn new() -> Self
     where
         S: Emptyable,
@@ -182,6 +197,16 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(Self::init(start, slice.len(), L::data_from_arc_slice(arc)))
     }
 
+    /// Creates a new `ArcSlice` by copying the given slice.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from_slice(b"hello world");
+    /// assert_eq!(s, b"hello world");
+    /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_slice(slice: &S) -> Self
     where
@@ -190,6 +215,20 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Self::from_slice_impl::<Infallible>(slice).unwrap_checked()
     }
 
+    /// Tries creating a new `ArcSlice` by copying the given slice,
+    /// returning an error if the allocation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let s = ArcSlice::<[u8]>::try_from_slice(b"hello world")?;
+    /// assert_eq!(s, b"hello world");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn try_from_slice(slice: &S) -> Result<Self, AllocError>
     where
         S::Item: Copy,
@@ -244,22 +283,78 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Some(Self::init(start, length, data))
     }
 
+    /// Returns the number of elements in the slice.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(&[0, 1, 2]);
+    /// assert_eq!(s.len(), 3);
+    /// ```
     pub const fn len(&self) -> usize {
         self.length
     }
 
+    /// Returns `true` if the slice has a length of 0.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(&[0, 1, 2]);
+    /// assert!(!s.is_empty());
+    ///
+    /// let s = ArcSlice::<[u8]>::from(&[]);
+    /// assert!(s.is_empty());
+    /// ```
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns a raw pointer to the slice’s buffer.
+    ///
+    /// # Examples
+    ///
+    /// See [`slice::as_ptr`]
     pub const fn as_ptr(&self) -> *const S::Item {
         self.start.as_ptr()
     }
 
+    /// Extracts a slice containing the entire buffer.
+    ///
+    /// Equivalent to `&s[..]`.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// assert_eq!(s.as_slice(), b"hello world");
+    /// ```
     pub fn as_slice(&self) -> &S {
         unsafe { S::from_raw_parts(self.start, self.length) }
     }
 
+    /// Borrows a subslice of an `ArcSlice` with a given range.
+    ///
+    /// The returned [`ArcSliceBorrow`] is roughly equivalent to `(&S, &ArcSlice<S, L>)`, but
+    /// using [`ArcSliceBorrow::clone_arc`] doesn't need to perform the redundant bound check
+    /// when doing the equivalent of [`ArcSlice::subslice_from_ref`].
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let borrow = s.borrow(..5);
+    /// assert_eq!(&borrow[..], b"hello");
+    /// let s2: ArcSlice<[u8]> = borrow.clone_arc();
+    /// ```
     pub fn borrow(&self, range: impl RangeBounds<usize>) -> ArcSliceBorrow<S, L>
     where
         S: Subsliceable,
@@ -267,6 +362,23 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         unsafe { self.borrow_impl(range_offset_len(self.as_slice(), range)) }
     }
 
+    /// Borrows a subslice of an `ArcSlice` from a slice reference.
+    ///
+    /// The returned [`ArcSliceBorrow`] is roughly equivalent to `(&S, &ArcSlice<S, L>)`, but
+    /// using [`ArcSliceBorrow::clone_arc`] doesn't need to perform the redundant bound check
+    /// when doing the equivalent of [`ArcSlice::subslice_from_ref`].
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let hello = &s[..5];
+    /// let borrow = s.borrow_from_ref(hello);
+    /// assert_eq!(&borrow[..], b"hello");
+    /// let s2: ArcSlice<[u8]> = borrow.clone_arc();
+    /// ```
     pub fn borrow_from_ref(&self, subset: &S) -> ArcSliceBorrow<S, L>
     where
         S: Subsliceable,
@@ -291,11 +403,28 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(Self::init(self.start, self.length, data))
     }
 
+    /// Tries cloning the `ArcSlice`, returning an error if an allocation fails.
+    ///
+    /// The operation may not allocate, see
+    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let s = ArcSlice::<[u8]>::try_from_slice(b"hello world")?;
+    /// let s2 = s.try_clone()?;
+    /// assert_eq!(s2, b"hello world");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn try_clone(&self) -> Result<Self, AllocError> {
         self.clone_impl::<AllocError>()
     }
 
-    pub(crate) unsafe fn subslice_impl<E: AllocErrorImpl>(
+    unsafe fn subslice_impl<E: AllocErrorImpl>(
         &self,
         (offset, len): (usize, usize),
     ) -> Result<Self, E>
@@ -312,6 +441,23 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
+    /// Tries extracting a subslice of an `ArcSlice` with a given range, returning an error if an allocation fails.
+    ///
+    /// The operation may not allocate, see
+    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let s = ArcSlice::<[u8]>::try_from_slice(b"hello world")?;
+    /// let s2 = s.try_subslice(..5)?;
+    /// assert_eq!(s2, b"hello");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn try_subslice(&self, range: impl RangeBounds<usize>) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -319,6 +465,25 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         unsafe { self.subslice_impl::<AllocError>(range_offset_len(self.as_slice(), range)) }
     }
 
+    /// Tries extracting a subslice of an `ArcSlice` from a slice reference, returning an error
+    /// if an allocation fails.
+    ///
+    /// The operation may not allocate, see
+    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let s = ArcSlice::<[u8]>::try_from_slice(b"hello world")?;
+    /// let hello = &s[..5];
+    /// let s2 = s.try_subslice_from_ref(hello)?;
+    /// assert_eq!(s2, b"hello");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn try_subslice_from_ref(&self, subset: &S) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -326,6 +491,23 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         unsafe { self.subslice_impl::<AllocError>(subslice_offset_len(self.as_slice(), subset)) }
     }
 
+    /// Advances the start of the slice by `offset` items.
+    ///
+    /// This operation does not touch the underlying buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset > self.len()`.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let mut s = ArcSlice::<[u8]>::from(b"hello world");
+    /// s.advance(6);
+    /// assert_eq!(s, b"world");
+    /// ```
     pub fn advance(&mut self, offset: usize)
     where
         S: Subsliceable,
@@ -350,6 +532,24 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(())
     }
 
+    /// Tries truncating the slice to the first `len` items, returning an error if an
+    /// allocation fails.
+    ///
+    /// If `len` is greater than the slice length, this has no effect.
+    ///
+    /// The operation may not allocate, see
+    /// [`TruncateNoAllocLayout`](crate::layout::TruncateNoAllocLayout) documentation.
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let mut s = ArcSlice::<[u8]>::from(b"hello world");
+    /// s.try_truncate(5)?;
+    /// assert_eq!(s, b"hello");
+    /// # Ok(())
+    /// }
+    /// ```
     pub fn try_truncate(&mut self, len: usize) -> Result<(), AllocError>
     where
         S: Subsliceable,
@@ -375,7 +575,34 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    pub fn try_split_off<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, AllocError>
+    /// Try splitting the slice into two at the given index, returning an error if an allocation
+    /// fails.
+    ///
+    /// Afterwards `self` contains elements `[0, at)`, and the returned `ArcSlice`
+    /// contains elements `[at, len)`. This operation does not touch the underlying buffer.
+    ///
+    /// The operation may not allocate, see
+    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
+    /// let b = a.try_split_off(5)?;
+    ///
+    /// assert_eq!(a, b"hello");
+    /// assert_eq!(b, b" world");
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
+    pub fn try_split_off(&mut self, at: usize) -> Result<Self, AllocError>
     where
         S: Subsliceable,
     {
@@ -402,7 +629,34 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    pub fn try_split_to<E: AllocErrorImpl>(&mut self, at: usize) -> Result<Self, AllocError>
+    /// Try splitting the slice into two at the given index, returning an error if an allocation
+    /// fails.
+    ///
+    /// Afterwards `self` contains elements `[at, len)`, and the returned `ArcSlice`
+    /// contains elements `[0, at)`. This operation does not touch the underlying buffer.
+    ///
+    /// The operation may not allocate, see
+    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
+    /// let b = a.try_split_to(5)?;
+    ///
+    /// assert_eq!(a, b" world");
+    /// assert_eq!(b, b"hello");
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
+    pub fn try_split_to(&mut self, at: usize) -> Result<Self, AllocError>
     where
         S: Subsliceable,
     {
@@ -419,14 +673,56 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
+    /// Returns `true` if this is the only reference to the underlying buffer, and if this one
+    /// is unique (see [`Buffer::is_unique`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// assert!(s.is_unique());
+    /// let s2 = s.clone();
+    /// assert!(!s.is_unique());
+    /// drop(s2);
+    /// assert!(s.is_unique());
+    /// ```
     pub fn is_unique(&self) -> bool {
         L::is_unique::<S>(&self.data)
     }
 
+    /// Accesses the metadata of the underlying buffer if it can be successfully downcasted.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # #[cfg(feature = "default-layout-any-buffer")]
+    /// let s = ArcSlice::<[u8]>::from_buffer_with_metadata(vec![0, 1, 2], "metadata".to_string());
+    /// # #[cfg(not(feature = "default-layout-any-buffer"))]
+    /// # let s = ArcSlice::<[u8], arc_slice::layout::VecLayout>::from_buffer_with_metadata(
+    /// # vec![0, 1, 2], "metadata".to_string());
+    /// assert_eq!(s.metadata::<String>().unwrap(), "metadata");
+    /// ```
     pub fn metadata<M: Any>(&self) -> Option<&M> {
         L::get_metadata::<S, M>(&self.data)
     }
 
+    /// Tries downcasting the `ArcSlice` to its underlying buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// # #[cfg(feature = "default-layout-any-buffer")]
+    /// let s = ArcSlice::<[u8]>::from(vec![0, 1, 2]);
+    /// # #[cfg(not(feature = "default-layout-any-buffer"))]
+    /// # let s = ArcSlice::<[u8], arc_slice::layout::VecLayout>::from(vec![0, 1, 2]);
+    /// assert_eq!(s.try_into_buffer::<Vec<u8>>().unwrap(), [0, 1, 2]);
+    /// ```
     pub fn try_into_buffer<B: Buffer<S>>(self) -> Result<B, Self> {
         let mut this = ManuallyDrop::new(self);
         unsafe { L::take_buffer::<S, B>(this.start, this.length, &mut this.data) }
@@ -446,6 +742,17 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         self.with_layout_impl::<L2, AllocError>()
     }
 
+    /// Converts an `ArcSlice` into a primitive `ArcSlice`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<str>::from("hello world");
+    /// let bytes: ArcSlice<[u8]> = s.into_arc_slice();
+    /// assert_eq!(bytes, b"hello world");
+    /// ```
     pub fn into_arc_slice(self) -> ArcSlice<[S::Item], L> {
         let mut this = ManuallyDrop::new(self);
         ArcSlice {
@@ -476,6 +783,11 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
+    /// Drops an `ArcSlice`, hinting that it should be unique.
+    ///
+    /// In case of actual unicity, this method should be a little bit more efficient than a
+    /// conventional drop. Indeed, in the case where an Arc has been allocated, it will first
+    /// check the refcount, and shortcut the atomic fetch-and-sub if the count is one.
     pub fn drop_with_unique_hint(self) {
         let mut this = ManuallyDrop::new(self);
         unsafe { L::drop::<S, true>(this.start, this.length, &mut this.data) };
@@ -483,11 +795,32 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 }
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSlice<[T], L> {
+    /// Creates a new `ArcSlice` by moving the given array.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from_array([0, 1, 2]);
+    /// assert_eq!(s, [0, 1, 2]);
+    /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_array<const N: usize>(array: [T; N]) -> Self {
         Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
     }
 
+    /// Tries creating a new `ArcSlice` by moving the given array,
+    /// returning it if an allocation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::try_from_array([0, 1, 2]).unwrap();
+    /// assert_eq!(s, [0, 1, 2]);
+    /// ```
     pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, [T; N]> {
         Self::from_array_impl::<AllocError, N>(array).map_err(|(_, array)| array)
     }
@@ -499,6 +832,17 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: TruncateNoAllocLayout,
     > ArcSlice<S, L>
 {
+    /// Truncate the slice to the first `len` items.
+    ///
+    /// If `len` is greater than the slice length, this has no effect.
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let mut s = ArcSlice::<[u8]>::from(b"hello world");
+    /// s.truncate(5);
+    /// assert_eq!(s, b"hello");
+    /// ```
     pub fn truncate(&mut self, len: usize)
     where
         S: Subsliceable,
@@ -513,6 +857,17 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > ArcSlice<S, L>
 {
+    /// Extracts a subslice of an `ArcSlice` with a given range.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let s2 = s.subslice(..5);
+    /// assert_eq!(s2, b"hello");
+    /// ```
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self
     where
         S: Subsliceable,
@@ -521,6 +876,18 @@ impl<
             .unwrap_checked()
     }
 
+    /// Extracts a subslice of an `ArcSlice` from a slice reference.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let hello = &s[..5];
+    /// let s2 = s.subslice_from_ref(hello);
+    /// assert_eq!(s2, b"hello");
+    /// ```
     pub fn subslice_from_ref(&self, subset: &S) -> Self
     where
         S: Subsliceable,
@@ -529,6 +896,26 @@ impl<
             .unwrap_checked()
     }
 
+    /// Splits the slice into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[0, at)`, and the returned `ArcSlice`
+    /// contains elements `[at, len)`. This operation does not touch the underlying buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
+    /// let b = a.split_off(5);
+    ///
+    /// assert_eq!(a, b"hello");
+    /// assert_eq!(b, b" world");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
     #[must_use = "consider `ArcSlice::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self
     where
@@ -537,6 +924,26 @@ impl<
         self.split_off_impl::<Infallible>(at).unwrap_checked()
     }
 
+    /// Splits the slice into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[at, len)`, and the returned `ArcSlice`
+    /// contains elements `[0, at)`. This operation does not touch the underlying buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
+    /// let b = a.split_to(5);
+    ///
+    /// assert_eq!(a, b" world");
+    /// assert_eq!(b, b"hello");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
     #[must_use = "consider `ArcSlice::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self
     where

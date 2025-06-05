@@ -5,7 +5,6 @@
 //! ```rust
 //! use arc_slice::{ArcSlice, ArcSliceMut};
 //!
-//! # fn main() {
 //! let mut bytes_mut: ArcSliceMut<[u8]> = ArcSliceMut::new();
 //! bytes_mut.extend_from_slice(b"Hello world");
 //!
@@ -17,7 +16,6 @@
 //! let b: ArcSlice<[u8]> = bytes.split_to(6);
 //! assert_eq!(bytes, b"world");
 //! assert_eq!(b, b"Hello ");
-//! }
 //! ```
 //!
 //! Depending on its [layout], [`ArcSlice`] can also support arbitrary buffer, e.g. shared memory,

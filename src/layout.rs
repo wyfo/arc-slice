@@ -62,10 +62,8 @@ pub trait LayoutMut: Layout + private::LayoutMut {}
 /// ```rust
 /// # use core::mem::size_of;
 /// # use arc_slice::{layout::ArcLayout, ArcBytes, ArcBytesMut};
-/// # fn main() {
 /// assert_eq!(size_of::<ArcBytes<ArcLayout>>(), 3 * size_of::<usize>());
 /// assert_eq!(size_of::<ArcBytesMut<ArcLayout>>(), 4 * size_of::<usize>());
-/// # }
 /// ```
 #[derive(Debug)]
 pub struct ArcLayout<
@@ -97,12 +95,10 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> LayoutMut for ArcLayout<ANY_BUF
 /// ```rust
 /// # use core::mem::size_of;
 /// # use arc_slice::{layout::BoxedSliceLayout, ArcBytes};
-/// # fn main() {
 /// assert_eq!(
 ///     size_of::<ArcBytes<BoxedSliceLayout>>(),
 ///     3 * size_of::<usize>()
 /// );
-/// # }
 /// ```
 #[derive(Debug)]
 pub struct BoxedSliceLayout;
@@ -119,10 +115,8 @@ impl StaticLayout for BoxedSliceLayout {}
 /// ```rust
 /// # use core::mem::size_of;
 /// # use arc_slice::{layout::VecLayout, ArcBytes, ArcBytesMut};
-/// # fn main() {
 /// assert_eq!(size_of::<ArcBytes<VecLayout>>(), 4 * size_of::<usize>());
 /// assert_eq!(size_of::<ArcBytesMut<VecLayout>>(), 4 * size_of::<usize>());
-/// # }
 /// ```
 #[derive(Debug)]
 pub struct VecLayout;
@@ -136,9 +130,7 @@ impl LayoutMut for VecLayout {}
 /// ```rust
 /// # use core::mem::size_of;
 /// # use arc_slice::{layout::RawLayout, ArcBytes};
-/// # fn main() {
 /// assert_eq!(size_of::<ArcBytes<RawLayout>>(), 4 * size_of::<usize>());
-/// # }
 /// ```
 ///
 /// [`RawBuffer`]: crate::buffer::RawBuffer
