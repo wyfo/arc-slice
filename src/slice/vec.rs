@@ -19,7 +19,7 @@ use crate::{
     slice::ArcSliceLayout,
     slice_mut,
     slice_mut::ArcSliceMutLayout,
-    utils::{transmute_checked, try_transmute},
+    utils::{transmute_checked, try_transmute, unreachable_checked},
 };
 
 const CAPACITY_FLAG: usize = 1;
@@ -319,10 +319,11 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         let (mut ptr, base) = data;
         match ptr.get_mut::<S>() {
             Data::Arc(arc) => L2::try_data_from_arc(arc),
-            _ if !L2::ANY_BUFFER => None,
-            Data::Static => {
+            Data::Static if L2::STATIC_DATA.is_some() || L2::ANY_BUFFER => {
                 L2::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) }).ok()
             }
+            _ if !L2::ANY_BUFFER => None,
+            Data::Static => unreachable_checked(),
             Data::Capacity(capacity) => L2::data_from_vec::<S, E>(unsafe {
                 Self::rebuild_vec::<S>(start, length, capacity, base)
             })

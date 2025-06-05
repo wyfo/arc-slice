@@ -326,7 +326,12 @@ unsafe impl ArcSliceLayout for RawLayout {
     ) -> Option<L::Data> {
         let res = match arc_or_vtable::<S>(data) {
             ArcOrVTable::Arc(arc) => return L::try_data_from_arc(arc),
-            _ if !L::ANY_BUFFER => return None,
+            ArcOrVTable::Vtable { vtable, .. } if !L::ANY_BUFFER => {
+                if L::STATIC_DATA.is_none() || !ptr::eq(vtable, static_vtable::VTABLE) {
+                    return None;
+                }
+                Ok(None)
+            }
             ArcOrVTable::Vtable { ptr, vtable } if E::FALLIBLE => unsafe {
                 (vtable.into_arc_fallible)(ptr)
             },

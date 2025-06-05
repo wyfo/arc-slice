@@ -165,8 +165,10 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
     ) -> Option<L::Data> {
         match Self::arc::<S>(&data) {
             Some(arc) => L::try_data_from_arc(arc),
-            _ if !L::ANY_BUFFER => None,
-            None => L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) }).ok(),
+            None if L::STATIC_DATA.is_some() || L::ANY_BUFFER => {
+                L::data_from_static::<_, E>(unsafe { S::from_raw_parts(start, length) }).ok()
+            }
+            None => None,
         }
     }
 }
