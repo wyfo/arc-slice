@@ -16,6 +16,7 @@ use crate::{
     slice::ArcSliceLayout,
     slice_mut,
     slice_mut::ArcSliceMutLayout,
+    utils::try_transmute,
     vtable::{generic_take_buffer, VTable},
 };
 
@@ -25,9 +26,7 @@ mod static_vtable {
     #[allow(unused_imports)]
     use crate::msrv::NonNullExt;
     use crate::{
-        buffer::{Slice, SliceExt},
         error::AllocError,
-        macros::is_not,
         vtable::{no_capacity, VTable},
     };
 
@@ -38,18 +37,14 @@ mod static_vtable {
     unsafe fn get_metadata(_ptr: *const (), _type_id: TypeId) -> Option<NonNull<()>> {
         None
     }
-    unsafe fn take_buffer<S: Slice + ?Sized>(
-        buffer: NonNull<()>,
+    unsafe fn take_buffer(
+        _buffer: NonNull<()>,
         _ptr: *const (),
-        type_id: TypeId,
-        start: NonNull<()>,
-        length: usize,
+        _type_id: TypeId,
+        _start: NonNull<()>,
+        _length: usize,
     ) -> Option<NonNull<()>> {
-        if is_not!({ type_id }, &'static S) {
-            return None;
-        }
-        unsafe { buffer.cast().write(S::from_raw_parts(start.cast(), length)) };
-        Some(buffer)
+        None
     }
     unsafe fn drop(_ptr: *const ()) {}
     unsafe fn drop_with_unique_hint(_ptr: *const ()) {}
@@ -61,21 +56,19 @@ mod static_vtable {
         Ok(None)
     }
 
-    pub(super) const fn new_vtable<S: Slice + ?Sized>() -> &'static VTable {
-        &VTable {
-            deallocate,
-            drop,
-            drop_with_unique_hint,
-            clone,
-            is_buffer_unique,
-            get_metadata,
-            take_buffer: take_buffer::<S>,
-            capacity: no_capacity,
-            try_reserve: None,
-            into_arc,
-            into_arc_fallible,
-        }
-    }
+    pub(super) const VTABLE: &VTable = &VTable {
+        deallocate,
+        drop,
+        drop_with_unique_hint,
+        clone,
+        is_buffer_unique,
+        get_metadata,
+        take_buffer,
+        capacity: no_capacity,
+        try_reserve: None,
+        into_arc,
+        into_arc_fallible,
+    };
 }
 
 mod raw_vtable {
@@ -188,10 +181,9 @@ fn arc_or_vtable<S: Slice + ?Sized>(
 
 unsafe impl ArcSliceLayout for RawLayout {
     type Data = (*const (), Option<&'static VTable>);
-    const STATIC_DATA: Option<Self::Data> =
-        Some((ptr::null(), Some(static_vtable::new_vtable::<[()]>())));
+    const STATIC_DATA: Option<Self::Data> = Some((ptr::null(), Some(static_vtable::VTABLE)));
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> =
-        MaybeUninit::new((ptr::null(), Some(static_vtable::new_vtable::<[()]>())));
+        MaybeUninit::new((ptr::null(), Some(static_vtable::VTABLE)));
 
     fn data_from_arc<S: Slice + ?Sized, const ANY_BUFFER: bool>(
         arc: Arc<S, ANY_BUFFER>,
@@ -208,12 +200,6 @@ unsafe impl ArcSliceLayout for RawLayout {
         arc: Arc<S, ANY_BUFFER>,
     ) -> Self::Data {
         (arc.into_raw().as_ptr(), Some(arc_vtable::new::<S, B>()))
-    }
-
-    fn data_from_static<S: Slice + ?Sized, E: AllocErrorImpl>(
-        _slice: &'static S,
-    ) -> Result<Self::Data, (E, &'static S)> {
-        Ok((ptr::null(), Some(static_vtable::new_vtable::<S>())))
     }
 
     fn data_from_vec<S: Slice + ?Sized, E: AllocErrorImpl>(
@@ -287,9 +273,14 @@ unsafe impl ArcSliceLayout for RawLayout {
                     .map_err(mem::forget)
                     .ok()
             }
-            ArcOrVTable::Vtable { ptr, vtable } => unsafe {
-                generic_take_buffer(ptr, vtable, start.cast(), length)
-            },
+            ArcOrVTable::Vtable { ptr, vtable } => {
+                match unsafe { generic_take_buffer(ptr, vtable, start.cast(), length) } {
+                    None if ptr::eq(vtable, static_vtable::VTABLE) => {
+                        try_transmute(unsafe { S::from_raw_parts::<'static>(start, length) }).ok()
+                    }
+                    buffer => buffer,
+                }
+            }
         }
     }
 
