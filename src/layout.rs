@@ -150,7 +150,12 @@ impl TruncateNoAllocLayout for RawLayout {}
 
 /// A layout that can be converted from another one.
 ///
-/// Only layouts not implementing [`AnyBufferLayout`] cannot be converted from those implementing it.
+/// Only layouts not implementing [`AnyBufferLayout`] cannot be straightforwardly converted
+/// from those implementing it. However, the actual underlying buffer may be compatible,
+/// for example, an `ArcSlice<[u8], VecLayout>` backed by an Arc buffer can in fact be converted
+/// to an `ArcSlice<[u8], ArcLayout<false>>`. Fallible conversions like
+/// [`ArcSlice::try_with_layout`]/[`ArcSliceMut::try_freeze`]/etc. can be used to handle this edge
+/// case.
 pub trait FromLayout<L: Layout>: Layout {}
 
 impl<const STATIC: bool, L: Layout> FromLayout<ArcLayout<false, STATIC>> for L {}

@@ -57,25 +57,26 @@ pub unsafe trait Slice: Send + Sync + 'static {
     ///
     /// # Safety
     ///
-    /// The item slice must have been obtained from [`Self::to_slice`].
+    /// The item slice must be valid as if it has been obtained from [`Self::to_slice`].
     unsafe fn from_slice_unchecked(slice: &[Self::Item]) -> &Self;
     /// Convert back a mutable slice from its underlying item slice.
     ///
     /// # Safety
     ///
-    /// The item slice must have been obtained from [`Self::to_slice_mut`].
+    /// The item slice must be valid as if it has been obtained from [`Self::to_slice_mut`].
     unsafe fn from_slice_mut_unchecked(slice: &mut [Self::Item]) -> &mut Self;
     /// Convert back a boxed slice from its underlying boxed item slice.
     ///
     /// # Safety
     ///
-    /// The boxed item slice must have been obtained from [`Self::into_boxed_slice`].
+    /// The boxed item slice must be valid as if it has been obtained from
+    /// [`Self::into_boxed_slice`].
     unsafe fn from_boxed_slice_unchecked(boxed: Box<[Self::Item]>) -> Box<Self>;
     /// Convert back a vector from its underlying item vector.
     ///
     /// # Safety
     ///
-    /// The boxed item slice must have been obtained from [`Self::into_vec`].
+    /// The vector must be valid as if it has been obtained from [`Self::into_vec`].
     unsafe fn from_vec_unchecked(vec: Vec<Self::Item>) -> Self::Vec;
 
     /// Error which can occur when attempting to convert an item slice to the given slice type.
@@ -812,7 +813,7 @@ const _: () = {
     }
 
     #[cfg(feature = "raw-buffer")]
-    unsafe impl<T: Send + Sync + 'static, B: Buffer<T> + Sync> RawBuffer<T> for Arc<B> {
+    unsafe impl<S: ?Sized, B: Buffer<S> + Sync> RawBuffer<S> for Arc<B> {
         fn into_raw(self) -> *const () {
             Arc::into_raw(self).cast()
         }

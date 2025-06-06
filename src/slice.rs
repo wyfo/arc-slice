@@ -127,6 +127,7 @@ pub unsafe trait ArcSliceLayout: 'static {
     ) -> Option<L::Data>;
 }
 
+/// TODO
 #[cfg(not(feature = "inlined"))]
 pub struct ArcSlice<S: Slice + ?Sized, L: Layout = DefaultLayout> {
     pub(crate) start: NonNull<S::Item>,
@@ -134,6 +135,7 @@ pub struct ArcSlice<S: Slice + ?Sized, L: Layout = DefaultLayout> {
     data: ManuallyDrop<<L as ArcSliceLayout>::Data>,
 }
 
+/// TODO
 #[cfg(feature = "inlined")]
 #[repr(C)]
 pub struct ArcSlice<S: Slice + ?Sized, L: Layout = DefaultLayout> {
@@ -168,12 +170,9 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
-    /// use arc_slice::ArcSlice;
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
     ///
-    /// #[cfg(feature = "default-layout-static")]
-    /// let s = ArcSlice::<[u8]>::new();
-    /// # #[cfg(not(feature = "default-layout-static"))]
-    /// # let s = ArcSlice::<[u8], arc_slice::layout::VecLayout>::new();
+    /// let s = ArcSlice::<[u8], ArcLayout<true, true>>::new();
     /// assert_eq!(s, b"");
     /// ```
     pub const fn new() -> Self
@@ -325,7 +324,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     /// Extracts a slice containing the entire buffer.
     ///
-    /// Equivalent to `&s[..]`.
+    /// Equivalent to `&self[..]`.
     ///
     /// # Examples
     ///
@@ -586,7 +585,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// # fn main() -> Result<(), arc_slice::error::AllocError> {
@@ -640,7 +639,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// # fn main() -> Result<(), arc_slice::error::AllocError> {
@@ -663,6 +662,28 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         self.split_to_impl::<AllocError>(at)
     }
 
+    /// Tries to acquire the slice as mutable, returning an [`ArcSliceMut`] on success.
+    ///
+    /// There must be no other reference to the underlying buffer, and this one must be mutable
+    /// for the conversion to succeed. Otherwise, the original slice is returned. An `ArcSlice`
+    /// created from an array/slice or a vector is guaranteed to have a mutable buffer, as well
+    /// as one returned [`ArcSliceMut::freeze`].
+    ///
+    /// The conversion may allocate depending on the given [layouts](crate::layout), but allocation
+    /// errors are caught and the original slice is also returned in this case.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::DefaultLayout, ArcSlice, ArcSliceMut};
+    ///
+    /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
+    /// let b = a.clone();
+    ///
+    /// assert!(b.try_into_mut::<DefaultLayout>().is_err());
+    /// // b has been dropped
+    /// let a_mut: ArcSliceMut<[u8]> = a.try_into_mut().unwrap();
+    /// ```
     pub fn try_into_mut<L2: LayoutMut>(self) -> Result<ArcSliceMut<S, L2>, Self> {
         let mut this = ManuallyDrop::new(self);
         match unsafe { L::mut_data::<S, L2>(this.start, this.length, &mut this.data) } {
@@ -697,13 +718,10 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
-    /// use arc_slice::ArcSlice;
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
     ///
-    /// # #[cfg(feature = "default-layout-any-buffer")]
-    /// let s = ArcSlice::<[u8]>::from_buffer_with_metadata(vec![0, 1, 2], "metadata".to_string());
-    /// # #[cfg(not(feature = "default-layout-any-buffer"))]
-    /// # let s = ArcSlice::<[u8], arc_slice::layout::VecLayout>::from_buffer_with_metadata(
-    /// # vec![0, 1, 2], "metadata".to_string());
+    /// let metadata = "metadata".to_string();
+    /// let s = ArcSlice::<[u8], ArcLayout<true>>::from_buffer_with_metadata(vec![0, 1, 2], metadata);
     /// assert_eq!(s.metadata::<String>().unwrap(), "metadata");
     /// ```
     pub fn metadata<M: Any>(&self) -> Option<&M> {
@@ -715,12 +733,9 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
-    /// use arc_slice::ArcSlice;
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
     ///
-    /// # #[cfg(feature = "default-layout-any-buffer")]
-    /// let s = ArcSlice::<[u8]>::from(vec![0, 1, 2]);
-    /// # #[cfg(not(feature = "default-layout-any-buffer"))]
-    /// # let s = ArcSlice::<[u8], arc_slice::layout::VecLayout>::from(vec![0, 1, 2]);
+    /// let s = ArcSlice::<[u8], ArcLayout<true>>::from(vec![0, 1, 2]);
     /// assert_eq!(s.try_into_buffer::<Vec<u8>>().unwrap(), [0, 1, 2]);
     /// ```
     pub fn try_into_buffer<B: Buffer<S>>(self) -> Result<B, Self> {
@@ -738,6 +753,26 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
+    /// Tries to replace the layout of the `ArcSlice`, returning the original slice if it fails.
+    ///
+    /// The [layouts](crate::layout) must be compatible for the conversion to succeed, see
+    /// [`FromLayout`].
+    ///
+    /// The conversion may allocate depending on the given [layouts](crate::layout), but allocation
+    /// errors are caught and the original slice is also returned in this case.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use arc_slice::{
+    ///     layout::{ArcLayout, BoxedSliceLayout, VecLayout},
+    ///     ArcSlice,
+    /// };
+    ///
+    /// let a = ArcSlice::<[u8], BoxedSliceLayout>::from(vec![0, 1, 2]);
+    ///
+    /// let b = a.try_with_layout::<VecLayout>().unwrap();
+    /// assert!(b.try_with_layout::<ArcLayout<false>>().is_err());
+    /// ```
     pub fn try_with_layout<L2: Layout>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.with_layout_impl::<L2, AllocError>()
     }
@@ -762,6 +797,21 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
+    /// Tries converting an item slice into the given `ArcSlice`.
+    ///
+    /// The conversion uses [`Slice::try_from_slice`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let utf8 = ArcSlice::<[u8]>::from(b"hello world");
+    /// let not_utf8 = ArcSlice::<[u8]>::from(b"\x80\x81");
+    ///
+    /// assert!(ArcSlice::<str>::try_from_arc_slice(utf8).is_ok());
+    /// assert!(ArcSlice::<str>::try_from_arc_slice(not_utf8).is_err());
+    /// ```
     #[allow(clippy::type_complexity)]
     pub fn try_from_arc_slice(
         slice: ArcSlice<[S::Item], L>,
@@ -772,7 +822,23 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
-    #[allow(clippy::missing_safety_doc)]
+    /// Convert an item slice into the given `ArcSlice`, without checking the slice validity.
+    ///
+    /// # Safety
+    ///
+    /// The operation has the same contract as [`Slice::from_slice_unchecked`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let utf8 = ArcSlice::<[u8]>::from(b"hello world");
+    /// let not_utf8 = ArcSlice::<[u8]>::from(b"\x80\x81");
+    ///
+    /// assert!(ArcSlice::<str>::try_from_arc_slice(utf8).is_ok());
+    /// assert!(ArcSlice::<str>::try_from_arc_slice(not_utf8).is_err());
+    /// ```
     pub unsafe fn from_arc_slice_unchecked(slice: ArcSlice<[S::Item], L>) -> Self {
         debug_assert!(S::try_from_slice(&slice).is_ok());
         let mut slice = ManuallyDrop::new(slice);
@@ -903,7 +969,7 @@ impl<
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
@@ -931,7 +997,7 @@ impl<
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
@@ -955,6 +1021,21 @@ impl<
 
 #[cfg(feature = "oom-handling")]
 impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
+    /// Replace the layout of the `ArcSlice`.
+    ///
+    /// The [layouts](crate::layout) must be compatible, see [`FromLayout`].
+    ///
+    /// # Examples
+    /// ```rust
+    /// use arc_slice::{
+    ///     layout::{ArcLayout, BoxedSliceLayout, VecLayout},
+    ///     ArcSlice,
+    /// };
+    ///
+    /// let a = ArcSlice::<[u8]>::from(b"hello world");
+    ///
+    /// let b = a.with_layout::<VecLayout>();
+    /// ```
     pub fn with_layout<L2: FromLayout<L>>(self) -> ArcSlice<S, L2> {
         self.with_layout_impl::<L2, Infallible>().unwrap_checked()
     }
@@ -964,6 +1045,21 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 impl<S: Slice + ?Sized, const ANY_BUFFER: bool, const STATIC: bool>
     ArcSlice<S, ArcLayout<ANY_BUFFER, STATIC>>
 {
+    /// Replace the layout of the `ArcSlice`.
+    ///
+    /// The [layouts](crate::layout) must be compatible, see [`FromLayout`].
+    ///
+    /// # Examples
+    /// ```rust
+    /// use arc_slice::{
+    ///     layout::{ArcLayout, BoxedSliceLayout, VecLayout},
+    ///     ArcSlice,
+    /// };
+    ///
+    /// let a = ArcSlice::<[u8]>::from(b"hello world");
+    ///
+    /// let b = a.with_layout::<VecLayout>();
+    /// ```
     pub fn with_layout<L2: FromLayout<ArcLayout<ANY_BUFFER, STATIC>>>(self) -> ArcSlice<S, L2> {
         self.with_layout_impl::<L2, Infallible>().unwrap_checked()
     }
@@ -1023,11 +1119,41 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
             .map_err(|(err, b)| (err, b.buffer()))
     }
 
+    /// Creates a new `ArcSlice` with the given underlying buffer.
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
+    ///
+    /// let s = ArcSlice::<[u8], ArcLayout<true>>::from_buffer(vec![0, 1, 2]);
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.try_into_buffer::<Vec<u8>>().unwrap(), vec![0, 1, 2]);
+    /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_buffer<B: Buffer<S>>(buffer: B) -> Self {
         Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
+    /// Tries creating a new `ArcSlice` with the given underlying buffer, returning it if an
+    /// allocation fails.
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer).
+    ///
+    /// Having an Arc allocation depends on the [layout](crate::layout) and the buffer type,
+    /// e.g. there will be no allocation for a `Vec` with [`VecLayout`](crate::layout::VecLayout).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
+    ///
+    /// let s = ArcSlice::<[u8], ArcLayout<true>>::try_from_buffer(vec![0, 1, 2]).unwrap();
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.try_into_buffer::<Vec<u8>>().unwrap(), vec![0, 1, 2]);
+    /// ```
     pub fn try_from_buffer<B: Buffer<S>>(buffer: B) -> Result<Self, B> {
         Self::from_buffer_impl::<_, AllocError>(buffer).map_err(|(_, buffer)| buffer)
     }
@@ -1043,6 +1169,22 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
             .map_err(|(err, b)| (err, b.into_tuple()))
     }
 
+    /// Creates a new `ArcSlice` with the given underlying buffer and its associated metadata.
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer);
+    /// metadata can be retrieved with [`metadata`](Self::metadata).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
+    ///
+    /// let metadata = "metadata".to_string();
+    /// let s = ArcSlice::<[u8], ArcLayout<true>>::from_buffer_with_metadata(vec![0, 1, 2], metadata);
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.metadata::<String>().unwrap(), "metadata");
+    /// assert_eq!(s.try_into_buffer::<Vec<u8>>().unwrap(), vec![0, 1, 2]);
+    /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_buffer_with_metadata<B: Buffer<S>, M: Send + Sync + 'static>(
         buffer: B,
@@ -1051,6 +1193,28 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata).unwrap_checked()
     }
 
+    /// Tries creates a new `ArcSlice` with the given underlying buffer and its associated metadata,
+    /// returning them if an allocation fails.
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer);
+    /// metadata can be retrieved with [`metadata`](Self::metadata).
+    ///
+    /// Having an Arc allocation depends on the [layout](crate::layout) and the buffer type,
+    /// e.g. there will be no allocation for a `Vec` with [`VecLayout`](crate::layout::VecLayout).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
+    ///
+    /// let metadata = "metadata".to_string();
+    /// let s =
+    ///     ArcSlice::<[u8], ArcLayout<true>>::try_from_buffer_with_metadata(vec![0, 1, 2], metadata)
+    ///         .unwrap();
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.metadata::<String>().unwrap(), "metadata");
+    /// assert_eq!(s.try_into_buffer::<Vec<u8>>().unwrap(), vec![0, 1, 2]);
+    /// ```
     pub fn try_from_buffer_with_metadata<B: Buffer<S>, M: Send + Sync + 'static>(
         buffer: B,
         metadata: M,
@@ -1059,11 +1223,92 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
             .map_err(|(_, bm)| bm)
     }
 
+    /// Creates a new `ArcSlice` with the given underlying buffer with borrowed metadata.
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer);
+    /// metadata can be retrieved with [`metadata`](Self::metadata).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{
+    ///     buffer::{BorrowMetadata, Buffer},
+    ///     layout::ArcLayout,
+    ///     ArcSlice,
+    /// };
+    ///
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyBuffer(Vec<u8>);
+    /// impl Buffer<[u8]> for MyBuffer {
+    ///     fn as_slice(&self) -> &[u8] {
+    ///         &self.0
+    ///     }
+    /// }
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyMetadata;
+    /// impl BorrowMetadata for MyBuffer {
+    ///     type Metadata = MyMetadata;
+    ///     fn borrow_metadata(&self) -> &Self::Metadata {
+    ///         &MyMetadata
+    ///     }
+    /// }
+    /// let buffer = MyBuffer(vec![0, 1, 2]);
+    /// let s = ArcSlice::<[u8], ArcLayout<true>>::from_buffer_with_borrowed_metadata(buffer);
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.metadata::<MyMetadata>().unwrap(), &MyMetadata);
+    /// assert_eq!(
+    ///     s.try_into_buffer::<MyBuffer>().unwrap(),
+    ///     MyBuffer(vec![0, 1, 2])
+    /// );
+    /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_buffer_with_borrowed_metadata<B: Buffer<S> + BorrowMetadata>(buffer: B) -> Self {
         Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
+    /// Tries creating a new `ArcSlice` with the given underlying buffer with borrowed metadata,
+    /// returning it if an allocation fails.
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer);
+    /// metadata can be retrieved with [`metadata`](Self::metadata).
+    ///
+    /// Having an Arc allocation depends on the [layout](crate::layout) and the buffer type,
+    /// e.g. there will be no allocation for a `Vec` with [`VecLayout`](crate::layout::VecLayout).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{
+    ///     buffer::{BorrowMetadata, Buffer},
+    ///     layout::ArcLayout,
+    ///     ArcSlice,
+    /// };
+    ///
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyBuffer(Vec<u8>);
+    /// impl Buffer<[u8]> for MyBuffer {
+    ///     fn as_slice(&self) -> &[u8] {
+    ///         &self.0
+    ///     }
+    /// }
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyMetadata;
+    /// impl BorrowMetadata for MyBuffer {
+    ///     type Metadata = MyMetadata;
+    ///     fn borrow_metadata(&self) -> &Self::Metadata {
+    ///         &MyMetadata
+    ///     }
+    /// }
+    /// let buffer = MyBuffer(vec![0, 1, 2]);
+    /// let s =
+    ///     ArcSlice::<[u8], ArcLayout<true>>::try_from_buffer_with_borrowed_metadata(buffer).unwrap();
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.metadata::<MyMetadata>().unwrap(), &MyMetadata);
+    /// assert_eq!(
+    ///     s.try_into_buffer::<MyBuffer>().unwrap(),
+    ///     MyBuffer(vec![0, 1, 2])
+    /// );
+    /// ```
     pub fn try_from_buffer_with_borrowed_metadata<B: Buffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {
@@ -1083,27 +1328,159 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         Self::from_dyn_buffer_impl::<_, E>(unsafe { B::from_raw(ptr) })
     }
 
+    /// Creates a new `ArcSlice` with the given underlying raw buffer.
+    ///
+    /// For [layouts](crate::layout) others than [`RawLayout`](crate::layout::RawLayout), it is
+    /// the same as [`from_buffer`](Self::from_buffer).
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use arc_slice::{layout::RawLayout, ArcSlice};
+    ///
+    /// let s = ArcSlice::<[u8], RawLayout>::from_raw_buffer(Arc::new(vec![0, 1, 2]));
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(
+    ///     s.try_into_buffer::<Arc<Vec<u8>>>().unwrap(),
+    ///     Arc::new(vec![0, 1, 2])
+    /// );
+    /// ```
     #[cfg(all(feature = "raw-buffer", feature = "oom-handling"))]
     pub fn from_raw_buffer<B: RawBuffer<S>>(buffer: B) -> Self {
         Self::from_raw_buffer_impl::<_, Infallible>(BufferWithMetadata::new(buffer, ()))
             .unwrap_checked()
     }
 
+    /// Tries creating a new `ArcSlice` with the given underlying raw buffer, returning it if an
+    /// allocation fails.
+    ///
+    /// For [layouts](crate::layout) others than [`RawLayout`](crate::layout::RawLayout), it is
+    /// the same as [`try_from_buffer`](Self::try_from_buffer).
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use arc_slice::{layout::RawLayout, ArcSlice};
+    ///
+    /// let s = ArcSlice::<[u8], RawLayout>::try_from_raw_buffer(Arc::new(vec![0, 1, 2])).unwrap();
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(
+    ///     s.try_into_buffer::<Arc<Vec<u8>>>().unwrap(),
+    ///     Arc::new(vec![0, 1, 2])
+    /// );
+    /// ```
     #[cfg(feature = "raw-buffer")]
     pub fn try_from_raw_buffer<B: RawBuffer<S>>(buffer: B) -> Result<Self, B> {
         Self::from_raw_buffer_impl::<_, AllocError>(BufferWithMetadata::new(buffer, ()))
             .map_err(|(_, b)| b.buffer())
     }
 
+    /// Creates a new `ArcSlice` with the given underlying raw buffer with borrowed metadata.
+    ///
+    /// For [layouts](crate::layout) others than [`RawLayout`](crate::layout::RawLayout), it is
+    /// the same as [`from_buffer`](Self::from_buffer).
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer);
+    /// metadata can be retrieved with [`metadata`](Self::metadata).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// ///
+    /// use arc_slice::buffer::{BorrowMetadata, Buffer};
+    /// use arc_slice::{layout::RawLayout, ArcSlice};
+    ///
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyBuffer(Vec<u8>);
+    /// impl Buffer<[u8]> for MyBuffer {
+    ///     fn as_slice(&self) -> &[u8] {
+    ///         &self.0
+    ///     }
+    /// }
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyMetadata;
+    /// impl BorrowMetadata for MyBuffer {
+    ///     type Metadata = MyMetadata;
+    ///     fn borrow_metadata(&self) -> &Self::Metadata {
+    ///         &MyMetadata
+    ///     }
+    /// }
+    ///
+    /// let buffer = Arc::new(MyBuffer(vec![0, 1, 2]));
+    /// let s = ArcSlice::<[u8], RawLayout>::from_raw_buffer_with_borrowed_metadata(buffer);
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.metadata::<MyMetadata>().unwrap(), &MyMetadata);
+    /// assert_eq!(
+    ///     s.try_into_buffer::<Arc<MyBuffer>>().unwrap(),
+    ///     Arc::new(MyBuffer(vec![0, 1, 2]))
+    /// );
+    /// ```
     #[cfg(all(feature = "raw-buffer", feature = "oom-handling"))]
-    pub fn from_raw_buffer_and_borrowed_metadata<B: RawBuffer<S> + BorrowMetadata>(
+    pub fn from_raw_buffer_with_borrowed_metadata<B: RawBuffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Self {
         Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
     }
 
+    /// Tries creating a new `ArcSlice` with the given underlying raw buffer with borrowed metadata,
+    /// returning it if an allocation fails.
+    ///
+    /// For [layouts](crate::layout) others than [`RawLayout`](crate::layout::RawLayout), it is
+    /// the same as [`from_buffer`](Self::from_buffer).
+    ///
+    /// The buffer can be extracted back using [`try_into_buffer`](Self::try_into_buffer);
+    /// metadata can be retrieved with [`metadata`](Self::metadata).
+    ///
+    /// Having an Arc allocation depends on the [layout](crate::layout) and the buffer type,
+    /// e.g. there will be no allocation for a `Vec` with [`VecLayout`](crate::layout::VecLayout).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// ///
+    /// use arc_slice::buffer::{BorrowMetadata, Buffer};
+    /// use arc_slice::{layout::RawLayout, ArcSlice};
+    ///
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyBuffer(Vec<u8>);
+    /// impl Buffer<[u8]> for MyBuffer {
+    ///     fn as_slice(&self) -> &[u8] {
+    ///         &self.0
+    ///     }
+    /// }
+    /// #[derive(Debug, PartialEq, Eq)]
+    /// struct MyMetadata;
+    /// impl BorrowMetadata for MyBuffer {
+    ///     type Metadata = MyMetadata;
+    ///     fn borrow_metadata(&self) -> &Self::Metadata {
+    ///         &MyMetadata
+    ///     }
+    /// }
+    ///
+    /// let buffer = Arc::new(MyBuffer(vec![0, 1, 2]));
+    /// let s =
+    ///     ArcSlice::<[u8], RawLayout>::try_from_raw_buffer_with_borrowed_metadata(buffer).unwrap();
+    /// assert_eq!(s, [0, 1, 2]);
+    /// assert_eq!(s.metadata::<MyMetadata>().unwrap(), &MyMetadata);
+    /// assert_eq!(
+    ///     s.try_into_buffer::<Arc<MyBuffer>>().unwrap(),
+    ///     Arc::new(MyBuffer(vec![0, 1, 2]))
+    /// );
+    /// ```
     #[cfg(feature = "raw-buffer")]
-    pub fn try_from_raw_buffer_and_borrowed_metadata<B: RawBuffer<S> + BorrowMetadata>(
+    pub fn try_from_raw_buffer_with_borrowed_metadata<B: RawBuffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Result<Self, B> {
         Self::from_dyn_buffer_impl::<_, AllocError>(buffer).map_err(|(_, buffer)| buffer)
@@ -1111,6 +1488,18 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
 }
 
 impl<L: StaticLayout> ArcSlice<[u8], L> {
+    /// Creates a new `ArcSlice` from a static slice.
+    ///
+    /// The operation never allocates.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
+    ///
+    /// static HELLO_WORLD: ArcSlice<[u8], ArcLayout<true, true>> =
+    ///     ArcSlice::<[u8], ArcLayout<true, true>>::from_static(b"hello world");
+    /// ```
     pub const fn from_static(slice: &'static [u8]) -> Self {
         // MSRV 1.65 const `<*const _>::cast_mut` + 1.85 const `NonNull::new`
         let start = unsafe { NonNull::new_unchecked(slice.as_ptr() as _) };
@@ -1121,6 +1510,18 @@ impl<L: StaticLayout> ArcSlice<[u8], L> {
 }
 
 impl<L: StaticLayout> ArcSlice<str, L> {
+    /// Creates a new `ArcSlice` from a static str.
+    ///
+    /// The operation never allocates.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::ArcLayout, ArcSlice};
+    ///
+    /// static HELLO_WORLD: ArcSlice<str, ArcLayout<true, true>> =
+    ///     ArcSlice::<str, ArcLayout<true, true>>::from_static("hello world");
+    /// ```
     pub const fn from_static(slice: &'static str) -> Self {
         // MSRV 1.65 const `<*const _>::cast_mut` + 1.85 const `NonNull::new`
         let start = unsafe { NonNull::new_unchecked(slice.as_ptr() as _) };
@@ -1400,6 +1801,7 @@ const _: () = {
     }
 };
 
+/// TODO
 pub struct ArcSliceBorrow<'a, S: Slice + ?Sized, L: Layout = DefaultLayout> {
     start: NonNull<S::Item>,
     length: usize,
@@ -1450,14 +1852,60 @@ impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
         })
     }
 
+    /// Tries cloning the borrow into a subslice of the underlying [`ArcSlice`], returning an
+    /// error if an allocation fails.
+    ///
+    /// The returned [`ArcSlice`] has the same slice as the original borrow.
+    ///
+    /// The operation may not allocate, see
+    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let borrow = s.borrow(..5);
+    /// assert_eq!(&borrow[..], b"hello");
+    /// let s2: ArcSlice<[u8]> = borrow.try_clone_arc().unwrap();
+    /// assert_eq!(s2, b"hello");
+    /// ```
     pub fn try_clone_arc(self) -> Result<ArcSlice<S, L>, AllocError> {
         self.clone_arc_impl::<AllocError>()
     }
 
+    /// Extracts the borrowed slice.
+    ///
+    /// Roughly equivalent to `&self[..]`, but using the borrow lifetime instead of self's one.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// assert_eq!(s.as_slice(), b"hello world");
+    /// ```
     pub fn as_slice(&self) -> &'a S {
         unsafe { S::from_raw_parts(self.start, self.length) }
     }
 
+    /// Reborrows a subslice of an `ArcSliceBorrow` with a given range.
+    ///
+    /// The range is applied to the `ArcSliceBorrow` slice, not to the underlying `ArcSlice` one.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let borrow = s.borrow(..5);
+    /// assert_eq!(&borrow[..], b"hello");
+    /// let reborrow = borrow.reborrow(2..4);
+    /// assert_eq!(&reborrow[..], b"ll");
+    /// ```
     pub fn reborrow(&self, range: impl RangeBounds<usize>) -> ArcSliceBorrow<'a, S, L>
     where
         S: Subsliceable,
@@ -1465,6 +1913,23 @@ impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
         unsafe { self.reborrow_impl(range_offset_len(self.as_slice(), range)) }
     }
 
+    /// Reborrows a subslice of an `ArcSliceBorrow` from a slice reference.
+    ///
+    /// The slice reference must be contained into the `ArcSliceBorrow` slice, not into the underlying `ArcSlice` one.
+    ///
+    /// # Examples
+    ///
+    ///```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let hello = &s[..5];
+    /// let borrow = s.borrow_from_ref(hello);
+    /// assert_eq!(&borrow[..], b"hello");
+    /// let ll = &borrow[2..4];
+    /// let reborrow = borrow.reborrow_from_ref(ll);
+    /// assert_eq!(&reborrow[..], b"ll");
+    /// ```
     pub fn reborrow_from_ref(&self, subset: &S) -> ArcSliceBorrow<'a, S, L>
     where
         S: Subsliceable,
@@ -1491,7 +1956,21 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > ArcSliceBorrow<'_, S, L>
 {
-    #[allow(clippy::should_implement_trait)]
+    /// Clone the borrow into a subslice of the underlying [`ArcSlice`].
+    ///
+    /// The returned [`ArcSlice`] has the same slice as the original borrow.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::ArcSlice;
+    ///
+    /// let s = ArcSlice::<[u8]>::from(b"hello world");
+    /// let borrow = s.borrow(..5);
+    /// assert_eq!(&borrow[..], b"hello");
+    /// let s2: ArcSlice<[u8]> = borrow.clone_arc();
+    /// assert_eq!(s2, b"hello");
+    /// ```
     pub fn clone_arc(self) -> ArcSlice<S, L> {
         self.clone_arc_impl::<Infallible>().unwrap_checked()
     }
