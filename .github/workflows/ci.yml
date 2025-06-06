@@ -24,6 +24,8 @@ jobs:
         run: cargo build --manifest-path=bytes/Cargo.toml --tests --release
         env:
           RUSTFLAGS: --cfg=unreachable_checked
+      - name: expect
+        run: git grep -lz "#\[allow" | xargs -0 sed -i "s/#\[allow(/#[expect(/g" && cargo clippy --all-features
   test:
     runs-on: ubuntu-latest
     steps:

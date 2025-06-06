@@ -95,13 +95,11 @@ impl<T> OffsetFromUnsignedExt<T> for *const T {
 
 impl<T> OffsetFromUnsignedExt<T> for *mut T {
     type Origin = *const T;
-    #[allow(unstable_name_collisions)]
     unsafe fn offset_from_unsigned(self, origin: Self::Origin) -> usize {
         unsafe { self.cast_const().offset_from_unsigned(origin) }
     }
 }
 
-#[allow(unstable_name_collisions)]
 impl<T> OffsetFromUnsignedExt<T> for NonNull<T> {
     type Origin = NonNull<T>;
     unsafe fn offset_from_unsigned(self, origin: Self::Origin) -> usize {

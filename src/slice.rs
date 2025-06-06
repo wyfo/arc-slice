@@ -1835,7 +1835,6 @@ impl<S: fmt::Debug + Slice + ?Sized, L: Layout> fmt::Debug for ArcSliceBorrow<'_
 }
 
 impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
-    #[allow(clippy::wrong_self_convention)]
     fn clone_arc_impl<E: AllocErrorImpl>(self) -> Result<ArcSlice<S, L>, E> {
         if let Some(empty) = ArcSlice::new_empty(self.start, self.length) {
             return Ok(empty);

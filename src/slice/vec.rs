@@ -137,7 +137,6 @@ impl BoxedSliceOrVecLayout for VecLayout {
         Some(S::vec_start(vec).cast())
     }
 
-    #[allow(unstable_name_collisions)]
     unsafe fn rebuild_vec<S: Slice + ?Sized>(
         start: NonNull<S::Item>,
         length: usize,
@@ -243,7 +242,6 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         }
     }
 
-    #[allow(unstable_name_collisions)]
     unsafe fn take_buffer<S: Slice + ?Sized, B: Buffer<S>>(
         start: NonNull<S::Item>,
         length: usize,
@@ -290,7 +288,6 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         }
     }
 
-    #[allow(unstable_name_collisions)]
     unsafe fn mut_data<S: Slice + ?Sized, L2: ArcSliceMutLayout>(
         start: NonNull<S::Item>,
         length: usize,

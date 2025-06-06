@@ -466,7 +466,6 @@ impl Buffer<str> for String {
 }
 
 pub(crate) trait BufferExt<S: Slice + ?Sized>: Buffer<S> {
-    #[allow(unstable_name_collisions)]
     unsafe fn offset(&self, start: NonNull<S::Item>) -> usize {
         unsafe { start.offset_from_unsigned(self.as_slice().as_ptr()) }
     }
@@ -500,7 +499,6 @@ impl<S: Slice + ?Sized, B: Buffer<S>> BufferExt<S> for B {}
 /// [`set_len`]: Self::set_len
 /// [`try_reserve`]: Self::try_reserve
 /// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
-#[allow(clippy::len_without_is_empty)]
 pub unsafe trait BufferMut<S: ?Sized>: Buffer<S> + Sync {
     /// Returns the mutable buffer slice.
     fn as_mut_slice(&mut self) -> &mut S;

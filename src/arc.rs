@@ -137,7 +137,6 @@ impl<S: Slice + ?Sized> CompactVec<S> {
         Some(buffer)
     }
 
-    #[allow(unstable_name_collisions)]
     unsafe fn capacity(ptr: *const (), start: NonNull<()>) -> usize {
         // MSRV 1.65 let-else
         let buffer = match unsafe { vtable::check_unique::<Self>(ptr) } {
@@ -280,7 +279,6 @@ pub(crate) mod vtable {
         buffer.capacity() - unsafe { buffer.offset(start.cast()) }
     }
 
-    #[allow(unstable_name_collisions)]
     unsafe fn try_reserve<S: Slice + ?Sized, B: BufferMut<S>>(
         ptr: NonNull<()>,
         start: NonNull<()>,
@@ -604,7 +602,6 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         }
     }
 
-    #[allow(unstable_name_collisions)]
     pub(crate) unsafe fn capacity(&mut self, start: NonNull<S::Item>) -> Option<usize> {
         match self.vtable_or_capacity() {
             VTableOrCapacity::VTable(vtable) => {
@@ -617,7 +614,6 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         }
     }
 
-    #[allow(unstable_name_collisions)]
     pub(crate) unsafe fn try_reserve<const UNIQUE: bool>(
         &mut self,
         start: NonNull<S::Item>,
@@ -720,7 +716,6 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         }
     }
 
-    #[allow(unstable_name_collisions)]
     pub(crate) fn set_length<const UNIQUE: bool>(
         &mut self,
         start: NonNull<S::Item>,
