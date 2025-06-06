@@ -127,23 +127,74 @@ pub unsafe trait ArcSliceLayout: 'static {
     ) -> Option<L::Data>;
 }
 
-/// TODO
-#[cfg(not(feature = "inlined"))]
+/// A thread-safe, cheaply cloneable and sliceable slice.
+///
+/// `ArcSlice<S>` is roughly equivalent to `(*const S, Arc<S>)`, hence the properties mentioned
+/// above. With the suited [layout](crate::layout), it can also support arbitrary buffers like
+/// `Vec`, or shared memory. Arbitrary metadata can even be attached to the buffers.
+///
+/// It is mainly intended to manipulate byte slices `[u8]`/`str`, to facilitate zero-copy
+/// operations in network programming, hence the aliases
+/// [`ArcBytes`](crate::ArcBytes)/[`ArcStr`](crate::ArcStr). But can actually handle any type of
+/// slices, from strings with specific invariants to primitive slices with droppable items.
+///
+/// # Examples
+///
+/// ```rust
+/// use arc_slice::ArcSlice;
+///
+/// let mut mem = ArcSlice::<[u8]>::from("hello world");
+/// let a = mem.slice(0..5);
+///
+/// assert_eq!(a, "hello");
+///
+/// let b = mem.split_to(6);
+///
+/// assert_eq!(mem, "world");
+/// assert_eq!(b, "hello ");
+/// ```
+///
+/// With shared memory:
+/// ```rust
+/// use std::{
+///     fs::File,
+///     path::{Path, PathBuf},
+/// };
+///
+/// use arc_slice::{buffer::AsRefBuffer, layout::ArcLayout, ArcSlice};
+/// use memmap2::Mmap;
+///
+/// # fn main() -> std::io::Result<()> {
+/// let path = Path::new("README.md").to_owned();
+/// # #[cfg(not(miri))]
+/// let file = File::open(&path)?;
+/// # #[cfg(not(miri))]
+/// let mmap = unsafe { Mmap::map(&file)? };
+/// # #[cfg(miri)]
+/// # let mmap = b"# arc-slice".to_vec();
+///
+/// let bytes: ArcSlice<[u8], ArcLayout<true>> =
+///     ArcSlice::from_buffer_with_metadata(AsRefBuffer(mmap), path);
+/// assert!(bytes.starts_with(b"# arc-slice"));
+/// assert_eq!(bytes.metadata::<PathBuf>().unwrap(), Path::new("README.md"));
+/// # Ok(())
+/// # }
+/// ```
+#[cfg_attr(feature = "inlined", repr(C))]
 pub struct ArcSlice<S: Slice + ?Sized, L: Layout = DefaultLayout> {
+    #[cfg(not(feature = "inlined"))]
     pub(crate) start: NonNull<S::Item>,
+    #[cfg(not(feature = "inlined"))]
     pub(crate) length: usize,
+    #[cfg(not(feature = "inlined"))]
     data: ManuallyDrop<<L as ArcSliceLayout>::Data>,
-}
-
-/// TODO
-#[cfg(feature = "inlined")]
-#[repr(C)]
-pub struct ArcSlice<S: Slice + ?Sized, L: Layout = DefaultLayout> {
-    #[cfg(target_endian = "big")]
+    #[cfg(all(target_endian = "big", feature = "inlined"))]
     pub(crate) length: usize,
+    #[cfg(feature = "inlined")]
     data: ManuallyDrop<<L as ArcSliceLayout>::Data>,
+    #[cfg(feature = "inlined")]
     pub(crate) start: NonNull<S::Item>,
-    #[cfg(target_endian = "little")]
+    #[cfg(all(target_endian = "little", feature = "inlined"))]
     pub(crate) length: usize,
 }
 
@@ -1813,7 +1864,26 @@ const _: () = {
     }
 };
 
-/// TODO
+/// A subslice borrow of an [`ArcSlice`].
+///
+/// It is roughly equivalent to `(&S, &ArcSlice<S, L>)`, but using [`ArcSliceBorrow::clone_arc`]
+/// doesn't need to perform the redundant bound check when doing the equivalent of
+/// [`ArcSlice::subslice_from_ref`].
+///
+/// When using [`ArcLayout`](crate::layout::ArcLayout), `ArcSliceBorrow` is even more efficient
+/// because it can directly embed the internal Arc instead of an `ArcSlice` reference, saving
+/// one indirection.
+///
+/// # Examples
+///
+/// ```rust
+/// use arc_slice::ArcSlice;
+///
+/// let s = ArcSlice::<[u8]>::from(b"hello world");
+/// let borrow = s.borrow(..5);
+/// assert_eq!(&borrow[..], b"hello");
+/// let s2: ArcSlice<[u8]> = borrow.clone_arc();
+/// ```
 pub struct ArcSliceBorrow<'a, S: Slice + ?Sized, L: Layout = DefaultLayout> {
     start: NonNull<S::Item>,
     length: usize,
