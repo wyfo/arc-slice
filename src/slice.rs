@@ -675,12 +675,12 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
-    /// use arc_slice::{layout::DefaultLayout, ArcSlice, ArcSliceMut};
+    /// use arc_slice::{layout::DefaultLayoutMut, ArcSlice, ArcSliceMut};
     ///
     /// let mut a = ArcSlice::<[u8]>::from(b"hello world");
     /// let b = a.clone();
     ///
-    /// assert!(b.try_into_mut::<DefaultLayout>().is_err());
+    /// assert!(b.try_into_mut::<DefaultLayoutMut>().is_err());
     /// // b has been dropped
     /// let a_mut: ArcSliceMut<[u8]> = a.try_into_mut().unwrap();
     /// ```
@@ -1338,8 +1338,11 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
+    /// # #[cfg(not(feature = "portable-atomic-util"))]
     /// use std::sync::Arc;
     ///
+    /// # #[cfg(feature = "portable-atomic-util")]
+    /// # use portable_atomic_util::Arc;
     /// use arc_slice::{layout::RawLayout, ArcSlice};
     ///
     /// let s = ArcSlice::<[u8], RawLayout>::from_raw_buffer(Arc::new(vec![0, 1, 2]));
@@ -1366,8 +1369,11 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
+    /// # #[cfg(not(feature = "portable-atomic-util"))]
     /// use std::sync::Arc;
     ///
+    /// # #[cfg(feature = "portable-atomic-util")]
+    /// # use portable_atomic_util::Arc;
     /// use arc_slice::{layout::RawLayout, ArcSlice};
     ///
     /// let s = ArcSlice::<[u8], RawLayout>::try_from_raw_buffer(Arc::new(vec![0, 1, 2])).unwrap();
@@ -1394,8 +1400,11 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
+    /// # #[cfg(not(feature = "portable-atomic-util"))]
     /// use std::sync::Arc;
     ///
+    /// # #[cfg(feature = "portable-atomic-util")]
+    /// # use portable_atomic_util::Arc;
     /// ///
     /// use arc_slice::buffer::{BorrowMetadata, Buffer};
     /// use arc_slice::{layout::RawLayout, ArcSlice};
@@ -1447,8 +1456,11 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     /// # Examples
     ///
     /// ```rust
+    /// # #[cfg(not(feature = "portable-atomic-util"))]
     /// use std::sync::Arc;
     ///
+    /// # #[cfg(feature = "portable-atomic-util")]
+    /// # use portable_atomic_util::Arc;
     /// ///
     /// use arc_slice::buffer::{BorrowMetadata, Buffer};
     /// use arc_slice::{layout::RawLayout, ArcSlice};
