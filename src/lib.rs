@@ -39,8 +39,8 @@
 //! # #[cfg(miri)]
 //! # let mmap = b"# arc-slice".to_vec();
 //!
-//! let bytes: ArcBytes<ArcLayout<true>> =
-//!     ArcBytes::from_buffer_with_metadata(AsRefBuffer(mmap), path);
+//! let buffer = AsRefBuffer(mmap);
+//! let bytes: ArcBytes<ArcLayout<true>> = ArcBytes::from_buffer_with_metadata(buffer, path);
 //! assert!(bytes.starts_with(b"# arc-slice"));
 //! assert_eq!(bytes.metadata::<PathBuf>().unwrap(), Path::new("README.md"));
 //! # Ok(())

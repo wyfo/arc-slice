@@ -645,16 +645,16 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
                         return (Err(TryReserveError::Unsupported), start);
                     }
                 }
-                struct ArcSlice<S: Slice + ?Sized> {
+                struct ArcSliceBuffer<S: Slice + ?Sized> {
                     arc: ManuallyDrop<Arc<S, false>>,
                     length: usize,
                 }
-                impl<S: Slice + ?Sized> Buffer<S> for ArcSlice<S> {
+                impl<S: Slice + ?Sized> Buffer<S> for ArcSliceBuffer<S> {
                     fn as_slice(&self) -> &S {
                         unsafe { S::from_raw_parts(self.arc.slice_start(), self.length) }
                     }
                 }
-                unsafe impl<S: Slice + ?Sized> BufferMut<S> for ArcSlice<S> {
+                unsafe impl<S: Slice + ?Sized> BufferMut<S> for ArcSliceBuffer<S> {
                     fn as_mut_slice(&mut self) -> &mut S {
                         unsafe { S::from_raw_parts_mut(self.arc.slice_start(), self.length) }
                     }
@@ -678,7 +678,7 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
                         Ok(())
                     }
                 }
-                let mut buffer = ArcSlice {
+                let mut buffer = ArcSliceBuffer {
                     arc: ManuallyDrop::new(Arc {
                         inner: self.inner,
                         _phantom: self._phantom,

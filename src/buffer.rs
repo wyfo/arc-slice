@@ -10,6 +10,7 @@ use core::{
     convert::Infallible,
     mem,
     mem::ManuallyDrop,
+    ops::{Deref, DerefMut},
     ptr,
     ptr::{addr_of, addr_of_mut, NonNull},
     slice,
@@ -39,39 +40,39 @@ pub unsafe trait Slice: Send + Sync + 'static {
     /// The associated vector to the slice type, e.g. `Vec<T>` for `[T]` or `String` for `str`.
     type Vec: BufferMut<Self>;
 
-    /// Convert a slice to its underlying item slice.
+    /// Converts a slice to its underlying item slice.
     fn to_slice(&self) -> &[Self::Item];
-    /// Convert a mutable slice to its underlying item slice.
+    /// Converts a mutable slice to its underlying item slice.
     ///
     /// # Safety
     ///
     /// The item slice is never mutated, as it is only used for storage.
     unsafe fn to_slice_mut(&mut self) -> &mut [Self::Item];
-    /// Convert a boxed slice to its underlying boxed item slice.
+    /// Converts a boxed slice to its underlying boxed item slice.
     fn into_boxed_slice(self: Box<Self>) -> Box<[Self::Item]>;
-    /// Convert a vector to its underlying item vector.
+    /// Converts a vector to its underlying item vector.
     fn into_vec(vec: Self::Vec) -> Vec<Self::Item>;
 
-    /// Convert back a slice from its underlying item slice.
+    /// Converts back a slice from its underlying item slice.
     ///
     /// # Safety
     ///
     /// The item slice must be valid as if it has been obtained from [`Self::to_slice`].
     unsafe fn from_slice_unchecked(slice: &[Self::Item]) -> &Self;
-    /// Convert back a mutable slice from its underlying item slice.
+    /// Converts back a mutable slice from its underlying item slice.
     ///
     /// # Safety
     ///
     /// The item slice must be valid as if it has been obtained from [`Self::to_slice_mut`].
     unsafe fn from_slice_mut_unchecked(slice: &mut [Self::Item]) -> &mut Self;
-    /// Convert back a boxed slice from its underlying boxed item slice.
+    /// Converts back a boxed slice from its underlying boxed item slice.
     ///
     /// # Safety
     ///
     /// The boxed item slice must be valid as if it has been obtained from
     /// [`Self::into_boxed_slice`].
     unsafe fn from_boxed_slice_unchecked(boxed: Box<[Self::Item]>) -> Box<Self>;
-    /// Convert back a vector from its underlying item vector.
+    /// Converts back a vector from its underlying item vector.
     ///
     /// # Safety
     ///
@@ -82,7 +83,7 @@ pub unsafe trait Slice: Send + Sync + 'static {
     type TryFromSliceError;
     /// Try converting an item slice to the given slice type.
     fn try_from_slice(slice: &[Self::Item]) -> Result<&Self, Self::TryFromSliceError>;
-    /// Try converting a mutable item slice to the given slice type.
+    /// Tries converting a mutable item slice to the given slice type.
     fn try_from_slice_mut(slice: &mut [Self::Item]) -> Result<&mut Self, Self::TryFromSliceError>;
 }
 
@@ -202,22 +203,22 @@ where
     Self::Item: for<'a> serde::Deserialize<'a>,
     Self::TryFromSliceError: core::fmt::Display,
 {
-    /// Deserialize a slice with the given visitor.
+    /// Deserializes a slice with the given visitor.
     fn deserialize<'de, D: serde::Deserializer<'de>, V: serde::de::Visitor<'de>>(
         deserializer: D,
         visitor: V,
     ) -> Result<V::Value, D::Error>;
     /// What data the visitor expects to receive.
     fn expecting(f: &mut core::fmt::Formatter) -> core::fmt::Result;
-    /// Deserialize a slice from bytes.
+    /// Deserializes a slice from bytes.
     fn deserialize_from_bytes<E: serde::de::Error>(bytes: &[u8]) -> Result<&Self, E>;
-    /// Deserialize a vector from owned bytes.
+    /// Deserializes a vector from owned bytes.
     fn deserialize_from_byte_buf<E: serde::de::Error>(bytes: Vec<u8>) -> Result<Self::Vec, E>;
-    /// Deserialize a slice from string.
+    /// Deserializes a slice from string.
     fn deserialize_from_str<E: serde::de::Error>(s: &str) -> Result<&Self, E>;
-    /// Deserialize a slice from owned string.
+    /// Deserializes a slice from owned string.
     fn deserialize_from_string<E: serde::de::Error>(s: String) -> Result<Self::Vec, E>;
-    /// Try deserializing a slice from a sequence.
+    /// Tries deserializing a slice from a sequence.
     ///
     /// The sequence will be collected into an `ArcSliceMut<[S::Item]>` before calling
     /// [`ArcSliceMut::try_from_arc_slice_mut`](crate::ArcSliceMut::try_from_arc_slice_mut).
@@ -510,7 +511,7 @@ pub unsafe trait BufferMut<S: ?Sized>: Buffer<S> + Sync {
     ///
     /// First `len` items of buffer slice must be initialized.
     unsafe fn set_len(&mut self, len: usize) -> bool;
-    /// Try reserving capacity for at least `additional` items.
+    /// Tries reserving capacity for at least `additional` items.
     fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError>;
 }
 
@@ -657,8 +658,12 @@ impl<S: Slice + ?Sized, B: BufferMut<S>> BufferMutExt<S> for B {}
 /// [`into_raw`]: Self::into_raw
 /// [`from_raw`]: Self::from_raw
 pub unsafe trait RawBuffer<S: ?Sized>: Buffer<S> + Clone {
+    /// Converts the buffer into a raw pointer.
     fn into_raw(self) -> *const ();
+    /// Converts back the buffer from a raw pointer.
+    ///
     /// # Safety
+    ///
     /// The pointer must be obtained by a call to [`RawBuffer::into_raw`].
     unsafe fn from_raw(ptr: *const ()) -> Self;
 }
@@ -765,6 +770,20 @@ unsafe impl<B: Any, M: Any> DynBuffer for BufferWithMetadata<B, M> {
 #[derive(Debug, Clone)]
 pub struct AsRefBuffer<B>(pub B);
 
+impl<B> Deref for AsRefBuffer<B> {
+    type Target = B;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<B> DerefMut for AsRefBuffer<B> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 impl<S: ?Sized, B: AsRef<S> + Send + 'static> Buffer<S> for AsRefBuffer<B> {
     fn as_slice(&self) -> &S {
         self.0.as_ref()
@@ -776,6 +795,83 @@ impl<S: ?Sized, B: AsRef<S> + Send + 'static> Buffer<S> for AsRefBuffer<B> {
 }
 
 impl<B: BorrowMetadata> BorrowMetadata for AsRefBuffer<B> {
+    type Metadata = B::Metadata;
+
+    fn borrow_metadata(&self) -> &Self::Metadata {
+        self.0.borrow_metadata()
+    }
+}
+
+/// A wrapper around buffer implementing [`AsMut`].
+#[derive(Debug, Clone)]
+pub struct AsMutBuffer<B>(B);
+
+impl<B> AsMutBuffer<B> {
+    /// Creates a new `AsMutBuffer` from a given buffer.
+    ///
+    /// # SAFETY
+    ///
+    /// If buffer implements `AsMut<S>` and `AsRef<S>`, then both operations must return the same
+    /// slice. If `B` implements [`BorrowedMetadata`], then [`borrow_metadata`] must not invalidate
+    /// the buffer slice.
+    ///
+    /// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
+    pub unsafe fn new(buffer: B) -> Self {
+        Self(buffer)
+    }
+
+    /// Returns the inner buffer.
+    pub fn into_inner(self) -> B {
+        self.0
+    }
+}
+
+impl<B> Deref for AsMutBuffer<B> {
+    type Target = B;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<B> DerefMut for AsMutBuffer<B> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<S: ?Sized, B: AsRef<S> + Send + 'static> Buffer<S> for AsMutBuffer<B> {
+    fn as_slice(&self) -> &S {
+        self.0.as_ref()
+    }
+
+    fn is_unique(&self) -> bool {
+        false
+    }
+}
+
+/// SAFETY: Trait contract is upheld by `AsMutBuffer::new` contract.
+unsafe impl<S: Slice + ?Sized, B: AsRef<S> + AsMut<S> + Send + Sync + 'static> BufferMut<S>
+    for AsMutBuffer<B>
+{
+    fn as_mut_slice(&mut self) -> &mut S {
+        self.0.as_mut()
+    }
+
+    fn capacity(&self) -> usize {
+        self.0.as_ref().len()
+    }
+
+    unsafe fn set_len(&mut self, _len: usize) -> bool {
+        false
+    }
+
+    fn try_reserve(&mut self, _additional: usize) -> Result<(), TryReserveError> {
+        Err(TryReserveError::Unsupported)
+    }
+}
+
+impl<B: BorrowMetadata> BorrowMetadata for AsMutBuffer<B> {
     type Metadata = B::Metadata;
 
     fn borrow_metadata(&self) -> &Self::Metadata {

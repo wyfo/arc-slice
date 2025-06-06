@@ -130,28 +130,28 @@ pub unsafe trait ArcSliceLayout: 'static {
 /// A thread-safe, cheaply cloneable and sliceable slice.
 ///
 /// `ArcSlice<S>` is roughly equivalent to `(*const S, Arc<S>)`, hence the properties mentioned
-/// above. With the suited [layout](crate::layout), it can also support arbitrary buffers like
-/// `Vec`, or shared memory. Arbitrary metadata can even be attached to the buffers.
+/// above. With the suited [layout], it also supports arbitrary buffers like `Vec`, or shared
+/// memory. Arbitrary metadata can even be attached to the buffers.
 ///
 /// It is mainly intended to manipulate byte slices `[u8]`/`str`, to facilitate zero-copy
-/// operations in network programming, hence the aliases
-/// [`ArcBytes`](crate::ArcBytes)/[`ArcStr`](crate::ArcStr). But can actually handle any type of
-/// slices, from strings with specific invariants to primitive slices with droppable items.
+/// operations in network programming, hence the aliases [`ArcBytes`]/[`ArcStr`]. But it can
+/// actually handle any type of slices, from strings with specific invariants to primitive slices
+/// with droppable items.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use arc_slice::ArcSlice;
 ///
-/// let mut mem = ArcSlice::<[u8]>::from("hello world");
-/// let a = mem.slice(0..5);
+/// let mut mem = ArcSlice::<[u8]>::from(b"hello world");
+/// let a = mem.subslice(0..5);
 ///
-/// assert_eq!(a, "hello");
+/// assert_eq!(a, b"hello");
 ///
 /// let b = mem.split_to(6);
 ///
-/// assert_eq!(mem, "world");
-/// assert_eq!(b, "hello ");
+/// assert_eq!(mem, b"world");
+/// assert_eq!(b, b"hello ");
 /// ```
 ///
 /// With shared memory:
@@ -173,13 +173,17 @@ pub unsafe trait ArcSliceLayout: 'static {
 /// # #[cfg(miri)]
 /// # let mmap = b"# arc-slice".to_vec();
 ///
-/// let bytes: ArcSlice<[u8], ArcLayout<true>> =
-///     ArcSlice::from_buffer_with_metadata(AsRefBuffer(mmap), path);
+/// let buffer = AsRefBuffer(mmap);
+/// let bytes: ArcSlice<[u8], ArcLayout<true>> = ArcSlice::from_buffer_with_metadata(buffer, path);
 /// assert!(bytes.starts_with(b"# arc-slice"));
 /// assert_eq!(bytes.metadata::<PathBuf>().unwrap(), Path::new("README.md"));
 /// # Ok(())
 /// # }
 /// ```
+///
+/// [layout]: crate::layout
+/// [ArcBytes]: crate::ArcBytes
+/// [ArcStr]: crate::ArcStr
 #[cfg_attr(feature = "inlined", repr(C))]
 pub struct ArcSlice<S: Slice + ?Sized, L: Layout = DefaultLayout> {
     #[cfg(not(feature = "inlined"))]
@@ -224,7 +228,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// use arc_slice::{layout::ArcLayout, ArcSlice};
     ///
     /// let s = ArcSlice::<[u8], ArcLayout<true, true>>::new();
-    /// assert_eq!(s, b"");
+    /// assert_eq!(s, []);
     /// ```
     pub const fn new() -> Self
     where
@@ -248,6 +252,10 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     }
 
     /// Creates a new `ArcSlice` by copying the given slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX - size_of::<usize>()` bytes.
     ///
     /// # Examples
     ///
@@ -364,16 +372,14 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         self.len() == 0
     }
 
-    /// Returns a raw pointer to the slice’s buffer.
-    ///
-    /// # Examples
+    /// Returns a raw pointer to the slice.
     ///
     /// See [`slice::as_ptr`]
     pub const fn as_ptr(&self) -> *const S::Item {
         self.start.as_ptr()
     }
 
-    /// Extracts a slice containing the entire buffer.
+    /// Returns the slice.
     ///
     /// Equivalent to `&self[..]`.
     ///
@@ -625,7 +631,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    /// Try splitting the slice into two at the given index, returning an error if an allocation
+    /// Tries splitting the slice into two at the given index, returning an error if an allocation
     /// fails.
     ///
     /// Afterwards `self` contains elements `[0, at)`, and the returned `ArcSlice`
@@ -633,6 +639,10 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     ///
     /// The operation may not allocate, see
     /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
     ///
     /// # Examples
     ///
@@ -648,10 +658,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if `at > self.len()`.
     pub fn try_split_off(&mut self, at: usize) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -679,7 +685,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    /// Try splitting the slice into two at the given index, returning an error if an allocation
+    /// Tries splitting the slice into two at the given index, returning an error if an allocation
     /// fails.
     ///
     /// Afterwards `self` contains elements `[at, len)`, and the returned `ArcSlice`
@@ -687,6 +693,10 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     ///
     /// The operation may not allocate, see
     /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
     ///
     /// # Examples
     ///
@@ -702,10 +712,6 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if `at > self.len()`.
     pub fn try_split_to(&mut self, at: usize) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -873,7 +879,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         }
     }
 
-    /// Convert an item slice into the given `ArcSlice`, without checking the slice validity.
+    /// Converts an item slice into the given `ArcSlice`, without checking the slice validity.
     ///
     /// # Safety
     ///
@@ -885,10 +891,10 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// use arc_slice::ArcSlice;
     ///
     /// let utf8 = ArcSlice::<[u8]>::from(b"hello world");
-    /// let not_utf8 = ArcSlice::<[u8]>::from(b"\x80\x81");
     ///
-    /// assert!(ArcSlice::<str>::try_from_arc_slice(utf8).is_ok());
-    /// assert!(ArcSlice::<str>::try_from_arc_slice(not_utf8).is_err());
+    /// // SAFETY: `utf8` is a valid utf8 string
+    /// let s = unsafe { ArcSlice::<str>::from_arc_slice_unchecked(utf8) };
+    /// assert_eq!(s, "hello world");
     /// ```
     pub unsafe fn from_arc_slice_unchecked(slice: ArcSlice<[S::Item], L>) -> Self {
         debug_assert!(S::try_from_slice(&slice).is_ok());
@@ -913,6 +919,10 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
 impl<T: Send + Sync + 'static, L: Layout> ArcSlice<[T], L> {
     /// Creates a new `ArcSlice` by moving the given array.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX - size_of::<usize>()` bytes.
     ///
     /// # Examples
     ///
@@ -1018,6 +1028,10 @@ impl<
     /// Afterwards `self` contains elements `[0, at)`, and the returned `ArcSlice`
     /// contains elements `[at, len)`. This operation does not touch the underlying buffer.
     ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -1029,10 +1043,6 @@ impl<
     /// assert_eq!(a, b"hello");
     /// assert_eq!(b, b" world");
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if `at > self.len()`.
     #[must_use = "consider `ArcSlice::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self
     where
@@ -1046,6 +1056,10 @@ impl<
     /// Afterwards `self` contains elements `[at, len)`, and the returned `ArcSlice`
     /// contains elements `[0, at)`. This operation does not touch the underlying buffer.
     ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -1057,10 +1071,6 @@ impl<
     /// assert_eq!(a, b" world");
     /// assert_eq!(b, b"hello");
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if `at > self.len()`.
     #[must_use = "consider `ArcSlice::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self
     where
