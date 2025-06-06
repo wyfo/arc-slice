@@ -17,11 +17,10 @@ use core::{
 
 pub(crate) use crate::buffer::private::DynBuffer;
 #[allow(unused_imports)]
-use crate::msrv::{ConstPtrExt, NonNullExt, SlicePtrExt};
+use crate::msrv::{ConstPtrExt, NonNullExt, OffsetFromUnsignedExt, SlicePtrExt};
 use crate::{
     error::TryReserveError,
     macros::assume,
-    msrv::SubPtrExt,
     slice_mut::TryReserveResult,
     utils::{assert_checked, NewChecked},
 };
@@ -469,7 +468,7 @@ impl Buffer<str> for String {
 pub(crate) trait BufferExt<S: Slice + ?Sized>: Buffer<S> {
     #[allow(unstable_name_collisions)]
     unsafe fn offset(&self, start: NonNull<S::Item>) -> usize {
-        unsafe { start.sub_ptr(self.as_slice().as_ptr()) }
+        unsafe { start.offset_from_unsigned(self.as_slice().as_ptr()) }
     }
 
     fn len(&self) -> usize {

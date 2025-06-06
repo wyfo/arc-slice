@@ -9,7 +9,7 @@ use core::{
 };
 
 #[allow(unused_imports)]
-use crate::msrv::{BoxExt, ConstPtrExt, NonNullExt, StrictProvenance};
+use crate::msrv::{BoxExt, ConstPtrExt, NonNullExt, OffsetFromUnsignedExt, StrictProvenance};
 use crate::{
     atomic,
     atomic::AtomicUsize,
@@ -18,7 +18,7 @@ use crate::{
     },
     error::{AllocErrorImpl, TryReserveError},
     macros::is,
-    msrv::{ptr, NonZero, SubPtrExt},
+    msrv::{ptr, NonZero},
     slice_mut::TryReserveResult,
     utils::{assert_checked, unreachable_checked, NewChecked, UnwrapChecked},
     vtable::{generic_take_buffer, VTable},
@@ -144,7 +144,7 @@ impl<S: Slice + ?Sized> CompactVec<S> {
             Some(inner) => &unsafe { &*inner }.buffer,
             None => return usize::MAX,
         };
-        let offset = unsafe { start.cast().sub_ptr(buffer.start) };
+        let offset = unsafe { start.cast().offset_from_unsigned(buffer.start) };
         buffer.capacity.get() - offset
     }
 
@@ -188,7 +188,7 @@ impl<S: Slice + ?Sized> CompactVec<S> {
             }
         }
         let arc = ManuallyDrop::new(unsafe { Box::from_non_null(ptr.cast::<ArcInner<Self>>()) });
-        let offset = unsafe { start.cast().sub_ptr(arc.buffer.start) };
+        let offset = unsafe { start.cast().offset_from_unsigned(arc.buffer.start) };
         let mut buffer = ArcCompactVec {
             arc,
             length: offset + length,
@@ -613,7 +613,7 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
             }
             VTableOrCapacity::Capacity(capacity) => self
                 .is_unique()
-                .then(|| capacity - unsafe { start.sub_ptr(self.slice_start()) }),
+                .then(|| capacity - unsafe { start.offset_from_unsigned(self.slice_start()) }),
         }
     }
 
@@ -643,7 +643,7 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
                 (capacity, start.cast())
             }
             VTableOrCapacity::Capacity(_) => {
-                let offset = unsafe { start.sub_ptr(self.slice_start()) };
+                let offset = unsafe { start.offset_from_unsigned(self.slice_start()) };
                 if let Some(slice_length) = unsafe { self.slice_length() } {
                     if offset + length != slice_length {
                         return (Err(TryReserveError::Unsupported), start);
@@ -727,7 +727,7 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         length: usize,
     ) {
         if S::needs_drop() && (UNIQUE || self.is_unique()) {
-            let offset = unsafe { start.sub_ptr(self.slice_start()) };
+            let offset = unsafe { start.offset_from_unsigned(self.slice_start()) };
             unsafe { self.set_length_unchecked(offset + length) };
         }
     }

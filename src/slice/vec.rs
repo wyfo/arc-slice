@@ -7,7 +7,7 @@ use core::{
 };
 
 #[allow(unused_imports)]
-use crate::msrv::{BoolExt, StrictProvenance};
+use crate::msrv::{BoolExt, OffsetFromUnsignedExt, StrictProvenance};
 use crate::{
     arc::Arc,
     atomic::{AtomicPtr, Ordering},
@@ -15,7 +15,7 @@ use crate::{
     error::{AllocError, AllocErrorImpl},
     layout::{BoxedSliceLayout, VecLayout},
     macros::is,
-    msrv::{ptr, NonZero, SubPtrExt},
+    msrv::{ptr, NonZero},
     slice::ArcSliceLayout,
     slice_mut,
     slice_mut::ArcSliceMutLayout,
@@ -145,7 +145,7 @@ impl BoxedSliceOrVecLayout for VecLayout {
         base: MaybeUninit<Self::Base>,
     ) -> S::Vec {
         let base = unsafe { base.assume_init().cast() };
-        let len = unsafe { start.sub_ptr(base) } + length;
+        let len = unsafe { start.offset_from_unsigned(base) } + length;
         unsafe { S::from_vec_unchecked(Vec::from_raw_parts(base.as_ptr(), len, capacity.get())) }
     }
 }

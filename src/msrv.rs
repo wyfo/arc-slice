@@ -80,31 +80,32 @@ impl<T> StrictProvenance<T> for NonNull<T> {
     }
 }
 
-pub(crate) trait SubPtrExt<T>: Sized + Copy {
+#[allow(dead_code)]
+pub(crate) trait OffsetFromUnsignedExt<T>: Sized + Copy {
     type Origin;
-    unsafe fn sub_ptr(self, origin: Self::Origin) -> usize;
+    unsafe fn offset_from_unsigned(self, origin: Self::Origin) -> usize;
 }
 
-impl<T> SubPtrExt<T> for *const T {
+impl<T> OffsetFromUnsignedExt<T> for *const T {
     type Origin = *const T;
-    unsafe fn sub_ptr(self, origin: Self::Origin) -> usize {
+    unsafe fn offset_from_unsigned(self, origin: Self::Origin) -> usize {
         unsafe { self.offset_from(origin).try_into().unwrap_unchecked() }
     }
 }
 
-impl<T> SubPtrExt<T> for *mut T {
+impl<T> OffsetFromUnsignedExt<T> for *mut T {
     type Origin = *const T;
     #[allow(unstable_name_collisions)]
-    unsafe fn sub_ptr(self, origin: Self::Origin) -> usize {
-        unsafe { self.cast_const().sub_ptr(origin) }
+    unsafe fn offset_from_unsigned(self, origin: Self::Origin) -> usize {
+        unsafe { self.cast_const().offset_from_unsigned(origin) }
     }
 }
 
 #[allow(unstable_name_collisions)]
-impl<T> SubPtrExt<T> for NonNull<T> {
+impl<T> OffsetFromUnsignedExt<T> for NonNull<T> {
     type Origin = NonNull<T>;
-    unsafe fn sub_ptr(self, origin: Self::Origin) -> usize {
-        unsafe { self.as_ptr().sub_ptr(origin.as_ptr()) }
+    unsafe fn offset_from_unsigned(self, origin: Self::Origin) -> usize {
+        unsafe { self.as_ptr().offset_from_unsigned(origin.as_ptr()) }
     }
 }
 
