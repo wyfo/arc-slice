@@ -81,7 +81,7 @@ mod raw_vtable {
         buffer::{DynBuffer, RawBuffer, Slice, SliceExt},
         error::{AllocError, AllocErrorImpl},
         macros::{is, is_not},
-        utils::UnwrapChecked,
+        utils::UnwrapInfallible,
         vtable::{no_capacity, VTable},
     };
 
@@ -129,7 +129,7 @@ mod raw_vtable {
         ptr: *const (),
     ) -> Option<NonNull<()>> {
         let buffer = unsafe { B::from_raw(ptr) };
-        let (arc, _, _) = Arc::<S>::new_buffer::<_, Infallible>(buffer).unwrap_checked();
+        let (arc, _, _) = Arc::<S>::new_buffer::<_, Infallible>(buffer).unwrap_infallible();
         Some(arc.into_raw())
     }
 

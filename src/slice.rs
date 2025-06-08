@@ -33,7 +33,7 @@ use crate::{
     slice_mut::{ArcSliceMutLayout, Data},
     utils::{
         debug_slice, lower_hex, panic_out_of_range, range_offset_len, subslice_offset_len,
-        transmute_checked, try_transmute, upper_hex, UnwrapChecked,
+        transmute_checked, try_transmute, upper_hex, UnwrapChecked, UnwrapInfallible,
     },
     ArcSliceMut,
 };
@@ -270,7 +270,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     where
         S::Item: Copy,
     {
-        Self::from_slice_impl::<Infallible>(slice).unwrap_checked()
+        Self::from_slice_impl::<Infallible>(slice).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSlice` by copying the given slice,
@@ -311,7 +311,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
             return empty;
         }
         let (arc, start) = unsafe {
-            Arc::<S, false>::new_unchecked::<Infallible>(slice.to_slice()).unwrap_checked()
+            Arc::<S, false>::new_unchecked::<Infallible>(slice.to_slice()).unwrap_infallible()
         };
         Self::init(start, slice.len(), L::data_from_arc_slice(arc))
     }
@@ -333,7 +333,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     }
 
     pub(crate) fn from_vec(vec: S::Vec) -> Self {
-        Self::from_vec_impl::<Infallible>(vec).unwrap_checked()
+        Self::from_vec_impl::<Infallible>(vec).unwrap_infallible()
     }
 
     fn new_empty(start: NonNull<S::Item>, length: usize) -> Option<Self> {
@@ -934,7 +934,7 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<[T], L> {
     /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_array<const N: usize>(array: [T; N]) -> Self {
-        Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
+        Self::from_array_impl::<Infallible, N>(array).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSlice` by moving the given array,
@@ -974,7 +974,7 @@ impl<
     where
         S: Subsliceable,
     {
-        self.truncate_impl::<Infallible>(len).unwrap_checked();
+        self.truncate_impl::<Infallible>(len).unwrap_infallible();
     }
 }
 
@@ -1000,7 +1000,7 @@ impl<
         S: Subsliceable,
     {
         unsafe { self.subslice_impl::<Infallible>(range_offset_len(self.as_slice(), range)) }
-            .unwrap_checked()
+            .unwrap_infallible()
     }
 
     /// Extracts a subslice of an `ArcSlice` from a slice reference.
@@ -1020,7 +1020,7 @@ impl<
         S: Subsliceable,
     {
         unsafe { self.subslice_impl::<Infallible>(subslice_offset_len(self.as_slice(), subset)) }
-            .unwrap_checked()
+            .unwrap_infallible()
     }
 
     /// Splits the slice into two at the given index.
@@ -1048,7 +1048,7 @@ impl<
     where
         S: Subsliceable,
     {
-        self.split_off_impl::<Infallible>(at).unwrap_checked()
+        self.split_off_impl::<Infallible>(at).unwrap_infallible()
     }
 
     /// Splits the slice into two at the given index.
@@ -1076,7 +1076,7 @@ impl<
     where
         S: Subsliceable,
     {
-        self.split_to_impl::<Infallible>(at).unwrap_checked()
+        self.split_to_impl::<Infallible>(at).unwrap_infallible()
     }
 }
 
@@ -1195,7 +1195,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_buffer<B: Buffer<S>>(buffer: B) -> Self {
-        Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
+        Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSlice` with the given underlying buffer, returning it if an
@@ -1251,7 +1251,8 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
         buffer: B,
         metadata: M,
     ) -> Self {
-        Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata).unwrap_checked()
+        Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata)
+            .unwrap_infallible()
     }
 
     /// Tries creates a new `ArcSlice` with the given underlying buffer and its associated metadata,
@@ -1324,7 +1325,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_buffer_with_borrowed_metadata<B: Buffer<S> + BorrowMetadata>(buffer: B) -> Self {
-        Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
+        Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSlice` with the given underlying buffer with borrowed metadata,
@@ -1416,7 +1417,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     #[cfg(all(feature = "raw-buffer", feature = "oom-handling"))]
     pub fn from_raw_buffer<B: RawBuffer<S>>(buffer: B) -> Self {
         Self::from_raw_buffer_impl::<_, Infallible>(BufferWithMetadata::new(buffer, ()))
-            .unwrap_checked()
+            .unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSlice` with the given underlying raw buffer, returning it if an
@@ -1499,7 +1500,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout> ArcSlice<S, L> {
     pub fn from_raw_buffer_with_borrowed_metadata<B: RawBuffer<S> + BorrowMetadata>(
         buffer: B,
     ) -> Self {
-        Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
+        Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSlice` with the given underlying raw buffer with borrowed metadata,
@@ -1617,7 +1618,7 @@ impl<
     > Clone for ArcSlice<S, L>
 {
     fn clone(&self) -> Self {
-        self.clone_impl::<Infallible>().unwrap_checked()
+        self.clone_impl::<Infallible>().unwrap_infallible()
     }
 }
 
@@ -2063,6 +2064,6 @@ impl<
     /// assert_eq!(s2, b"hello");
     /// ```
     pub fn clone_arc(self) -> ArcSlice<S, L> {
-        self.clone_arc_impl::<Infallible>().unwrap_checked()
+        self.clone_arc_impl::<Infallible>().unwrap_infallible()
     }
 }

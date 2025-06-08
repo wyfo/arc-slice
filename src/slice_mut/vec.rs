@@ -12,7 +12,7 @@ use crate::{
     msrv::ptr,
     slice::ArcSliceLayout,
     slice_mut::{ArcSliceMutLayout, Data, TryReserveResult},
-    utils::{transmute_checked, NewChecked, UnwrapChecked},
+    utils::{transmute_checked, NewChecked, UnwrapInfallible},
 };
 
 const OFFSET_FLAG: usize = 0b01;
@@ -129,7 +129,9 @@ unsafe impl ArcSliceMutLayout for VecLayout {
         if S::needs_drop() {
             if let OffsetOrArc::Offset(offset) = Self::offset_or_arc::<S>(*data) {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) };
-                *data = Arc::<S>::new_vec::<Infallible>(vec).unwrap_checked().into();
+                *data = Arc::<S>::new_vec::<Infallible>(vec)
+                    .unwrap_infallible()
+                    .into();
             }
         }
     }

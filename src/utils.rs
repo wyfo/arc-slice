@@ -1,5 +1,6 @@
 use core::{
     any::Any,
+    convert::Infallible,
     fmt,
     mem::MaybeUninit,
     ops::{Bound, RangeBounds},
@@ -123,6 +124,28 @@ pub(crate) fn abort() -> ! {
         }
         let _guard = Abort;
         panic!("abort");
+    }
+}
+
+pub(crate) trait UnwrapInfallible<T> {
+    fn unwrap_infallible(self) -> T;
+}
+
+impl<T> UnwrapInfallible<T> for Result<T, Infallible> {
+    fn unwrap_infallible(self) -> T {
+        match self {
+            Ok(v) => v,
+            Err(infallible) => match infallible {},
+        }
+    }
+}
+
+impl<T, U> UnwrapInfallible<T> for Result<T, (Infallible, U)> {
+    fn unwrap_infallible(self) -> T {
+        match self {
+            Ok(v) => v,
+            Err((infallible, _)) => match infallible {},
+        }
     }
 }
 

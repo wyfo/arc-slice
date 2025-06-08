@@ -31,7 +31,7 @@ use crate::{
     slice::ArcSliceLayout,
     utils::{
         debug_slice, lower_hex, min_non_zero_cap, panic_out_of_range, transmute_checked,
-        try_transmute, upper_hex, UnwrapChecked,
+        try_transmute, upper_hex, UnwrapChecked, UnwrapInfallible,
     },
     ArcSlice,
 };
@@ -975,7 +975,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     where
         S::Item: Copy,
     {
-        Self::from_slice_impl::<Infallible>(slice).unwrap_checked()
+        Self::from_slice_impl::<Infallible>(slice).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSliceMut` by copying the given slice,
@@ -1003,7 +1003,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     pub(crate) fn new_bytes(slice: &S) -> Self {
         assert_checked(is!(S::Item, u8));
         let (arc, start) = unsafe {
-            Arc::<S, false>::new_unchecked::<Infallible>(slice.to_slice()).unwrap_checked()
+            Arc::<S, false>::new_unchecked::<Infallible>(slice.to_slice()).unwrap_infallible()
         };
         Self::init(start, slice.len(), slice.len(), Some(arc.into()))
     }
@@ -1029,7 +1029,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     }
 
     pub(crate) fn from_vec(vec: S::Vec) -> Self {
-        Self::from_vec_impl::<Infallible>(vec).unwrap_checked()
+        Self::from_vec_impl::<Infallible>(vec).unwrap_infallible()
     }
 
     fn with_capacity_impl<E: AllocErrorImpl, const ZEROED: bool>(
@@ -1065,7 +1065,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     where
         S: Emptyable,
     {
-        Self::with_capacity_impl::<Infallible, false>(capacity).unwrap_checked()
+        Self::with_capacity_impl::<Infallible, false>(capacity).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSliceMut` with the given capacity, returning an error if an
@@ -1119,7 +1119,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     where
         S: Zeroable,
     {
-        Self::with_capacity_impl::<Infallible, true>(length).unwrap_checked()
+        Self::with_capacity_impl::<Infallible, true>(length).unwrap_infallible()
     }
 
     /// Tries creating a new zeroed `ArcSliceMut` with the given capacity.
@@ -1274,7 +1274,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut> ArcSliceMut<[T], L> {
     /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_array<const N: usize>(array: [T; N]) -> Self {
-        Self::from_array_impl::<Infallible, N>(array).unwrap_checked()
+        Self::from_array_impl::<Infallible, N>(array).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSliceMut` by moving the given array,
@@ -1460,7 +1460,7 @@ impl<
     /// ```
     #[must_use = "consider `ArcSliceMut::truncate` if you don't need the other half"]
     pub fn split_off(&mut self, at: usize) -> Self {
-        self.split_off_impl::<Infallible>(at).unwrap_checked()
+        self.split_off_impl::<Infallible>(at).unwrap_infallible()
     }
 
     /// Splits the slice into two at the given index.
@@ -1485,7 +1485,7 @@ impl<
     /// ```
     #[must_use = "consider `ArcSliceMut::advance` if you don't need the other half"]
     pub fn split_to(&mut self, at: usize) -> Self {
-        self.split_to_impl::<Infallible>(at).unwrap_checked()
+        self.split_to_impl::<Infallible>(at).unwrap_infallible()
     }
 }
 
@@ -1523,7 +1523,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
     /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_buffer<B: BufferMut<S>>(buffer: B) -> Self {
-        Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
+        Self::from_buffer_impl::<_, Infallible>(buffer).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSliceMut` with the given underlying buffer, returning it if an
@@ -1585,7 +1585,8 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
         buffer: B,
         metadata: M,
     ) -> Self {
-        Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata).unwrap_checked()
+        Self::from_buffer_with_metadata_impl::<_, _, Infallible>(buffer, metadata)
+            .unwrap_infallible()
     }
 
     /// Tries creates a new `ArcSliceMut` with the given underlying buffer and its associated metadata,
@@ -1678,7 +1679,7 @@ impl<S: Slice + ?Sized, L: AnyBufferLayout + LayoutMut> ArcSliceMut<S, L> {
     /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_buffer_with_borrowed_metadata<B: BufferMut<S> + BorrowMetadata>(buffer: B) -> Self {
-        Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_checked()
+        Self::from_dyn_buffer_impl::<_, Infallible>(buffer).unwrap_infallible()
     }
 
     /// Tries creating a new `ArcSliceMut` with the given underlying buffer with borrowed metadata,
@@ -2019,7 +2020,7 @@ impl<T: Send + Sync + 'static, L: LayoutMut, const N: usize, const UNIQUE: bool>
     fn try_from(value: ArcSliceMut<[T], L, UNIQUE>) -> Result<Self, Self::Error> {
         let data = match value.data {
             Some(data) => data,
-            None if N == 0 => return Ok(try_transmute::<[T; 0], _>([]).unwrap_checked()),
+            None if N == 0 => return Ok(transmute_checked::<[T; 0], _>([])),
             None => return Err(value),
         };
         let this = ManuallyDrop::new(value);
