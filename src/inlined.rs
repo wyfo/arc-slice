@@ -15,6 +15,7 @@ use core::{
 };
 
 use either::Either;
+pub(crate) use private::InlinedLayout;
 
 #[cfg(feature = "oom-handling")]
 use crate::layout::AnyBufferLayout;
@@ -31,11 +32,13 @@ use crate::{
 
 const INLINED_FLAG: u8 = 0x80;
 
-#[allow(clippy::missing_safety_doc)]
-pub unsafe trait InlinedLayout {
-    const LEN: usize;
-    type Data: Copy;
-    const UNINIT: Self::Data;
+mod private {
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe trait InlinedLayout {
+        const LEN: usize;
+        type Data: Copy;
+        const UNINIT: Self::Data;
+    }
 }
 
 const _3_WORDS_LEN: usize = 3 * size_of::<usize>() - 2;
@@ -68,7 +71,15 @@ unsafe impl InlinedLayout for crate::layout::RawLayout {
     const UNINIT: Self::Data = [MaybeUninit::uninit(); _4_WORDS_LEN];
 }
 
-/// An inlined storage that can contains up to `size_of::<ArcBytes<L>>() - 2` bytes.
+/// An inlined storage that can contains a slice up to `size_of::<ArcBytes<L>>() - 2` bytes.
+///
+/// # Examples
+///
+/// ```rust
+/// use arc_slice::inlined::SmallSlice;
+///
+/// let s = SmallSlice::<str>::new("hello world").unwrap();
+/// assert_eq!(s, "hello world");
 #[repr(C)]
 pub struct SmallSlice<S: Slice<Item = u8> + ?Sized, L: Layout = DefaultLayout> {
     #[cfg(target_endian = "big")]
@@ -83,6 +94,7 @@ pub struct SmallSlice<S: Slice<Item = u8> + ?Sized, L: Layout = DefaultLayout> {
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
     const MAX_LEN: usize = L::LEN;
 
+    /// An empty SmallSlice.
     pub const EMPTY: Self = Self {
         data: L::UNINIT,
         offset: 0,
@@ -90,7 +102,16 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         _phantom: PhantomData,
     };
 
-    /// Create a new [`SmallSlice`] if the slice fit in.
+    /// Create a new `SmallSlice` if the slice fits in.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallSlice;
+    ///
+    /// assert!(SmallSlice::<[u8]>::new(&[0, 1, 2]).is_some());
+    /// assert!(SmallSlice::<[u8]>::new(&[0; 256]).is_none());
+    /// ```
     pub fn new(slice: &S) -> Option<Self> {
         if slice.len() > Self::MAX_LEN {
             return None;
@@ -111,19 +132,60 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         unsafe { (*addr_of!((*this).tagged_length)) & INLINED_FLAG != 0 }
     }
 
+    /// Returns the number of items in the slice.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallSlice;
+    ///
+    /// let s = SmallSlice::<[u8]>::new(&[0, 1, 2]).unwrap();
+    /// assert_eq!(s.len(), 3);
+    /// ```
     pub const fn len(&self) -> usize {
         (self.tagged_length & !INLINED_FLAG) as usize
     }
 
+    /// Returns `true` if the slice contains no items.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallSlice;
+    ///
+    /// let s = SmallSlice::<[u8]>::new(&[0, 1, 2]).unwrap();
+    /// assert!(!s.is_empty());
+    ///
+    /// let s = SmallSlice::<[u8]>::new(&[]).unwrap();
+    /// assert!(s.is_empty());
+    /// ```
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns a raw pointer to the slice's first item.
+    ///
+    /// See [`slice::as_ptr`].
     pub const fn as_ptr(&self) -> *const u8 {
         let data = ptr::from_ref(&self.data).cast::<u8>();
         unsafe { data.add(self.offset as usize) }
     }
 
+    /// Advances the start of the slice by `offset` items.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset > self.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallSlice;
+    ///
+    /// let mut s = SmallSlice::<[u8]>::new(b"hello world").unwrap();
+    /// s.advance(6);
+    /// assert_eq!(s, b"world");
+    /// ```
     pub fn advance(&mut self, offset: usize)
     where
         S: Subsliceable,
@@ -136,6 +198,17 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         self.tagged_length -= offset as u8;
     }
 
+    /// Truncate the slice to the first `len` items.
+    ///
+    /// If `len` is greater than the slice length, this has no effect.
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallSlice;
+    ///
+    /// let mut s = SmallSlice::<[u8]>::new(b"hello world").unwrap();
+    /// s.truncate(5);
+    /// assert_eq!(s, b"hello");
+    /// ```
     pub fn truncate(&mut self, len: usize)
     where
         S: Subsliceable,
@@ -146,6 +219,17 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallSlice<S, L> {
         }
     }
 
+    /// Extracts a subslice of a `SmallSlice` with a given range.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallSlice;
+    ///
+    /// let s = SmallSlice::<[u8]>::new(b"hello world").unwrap();
+    /// let s2 = s.subslice(..5);
+    /// assert_eq!(s2, b"hello");
+    /// ```
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self
     where
         S: Subsliceable,
@@ -314,11 +398,13 @@ impl<L: Layout> PartialEq<SmallSlice<str, L>> for String {
     }
 }
 
-/// As SSO-enabled implementation of [`ArcSlice`].
+/// A wrapper enabling [small string optimization] into [`ArcSlice`].
 ///
-/// It can store up to `size_of::<ArcBytes<L>>() - 2` bytes without allocating. However,
-/// the niche optimization of `ArcSlice` is lost, which means that
-/// `size_of::<SmallArcSlice<[u8], L>>() == size_of::<ArcSlice<[u8], L>>() + size_of::<usize>()`.
+/// It can store up to `size_of::<ArcBytes<L>>() - 2` bytes inline, without allocating.
+/// However, the niche optimization of `ArcSlice` is lost, which means that
+/// `size_of::<Option<SmallArcBytes<L>>>() == size_of::<SmallArcBytes<L>>() + size_of::<usize>()`.
+///
+/// [small string optimization]: https://cppdepend.com/blog/understanding-small-string-optimization-sso-in-stdstring/
 pub struct SmallArcSlice<S: Slice<Item = u8> + ?Sized, L: Layout = DefaultLayout>(Inner<S, L>);
 
 #[repr(C)]
@@ -328,17 +414,59 @@ union Inner<S: Slice<Item = u8> + ?Sized, L: Layout> {
 }
 
 impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
+    /// Creates a new empty `SmallArcSlice`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::new();
+    /// assert_eq!(s, []);
+    /// ```
     pub const fn new() -> Self {
         Self(Inner {
             small: SmallSlice::EMPTY,
         })
     }
 
+    /// Creates a new `SmallArcSlice` by copying the given slice.
+    ///
+    /// The slice will be stored inlined if it can fit into a `SmallSlice`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX - size_of::<usize>()` bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::from_slice(b"hello world");
+    /// assert_eq!(s, b"hello world");
+    /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_slice(slice: &S) -> Self {
         SmallSlice::new(slice).map_or_else(|| ArcSlice::from_slice(slice).into(), Into::into)
     }
 
+    /// Tries creating a new `SmallArcSlice` by copying the given slice, returning an error if the
+    /// allocation fails.
+    ///
+    /// The slice will be stored inlined if it can fit into a `SmallSlice`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let s = SmallArcSlice::<[u8]>::try_from_slice(b"hello world")?;
+    /// assert_eq!(s, b"hello world");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn try_from_slice(slice: &S) -> Result<Self, AllocError> {
         SmallSlice::new(slice).map_or_else(
             || Ok(ArcSlice::try_from_slice(slice)?.into()),
@@ -346,6 +474,21 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         )
     }
 
+    /// Returns either a reference to the inlined [`SmallSlice`] storage, or to the [`ArcSlice`]
+    /// one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    /// use either::Either;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::new();
+    /// assert!(matches!(s.as_either(), Either::Left(_)));
+    ///
+    /// let s = SmallArcSlice::<[u8]>::from_array([0; 256]);
+    /// assert!(matches!(s.as_either(), Either::Right(_)));
+    /// ```
     #[inline(always)]
     pub fn as_either(&self) -> Either<&SmallSlice<S, L>, &ArcSlice<S, L>> {
         if unsafe { SmallSlice::is_inlined(addr_of!(self.0.small)) } {
@@ -355,6 +498,21 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
+    /// Returns either a mutable reference to the inlined [`SmallSlice`] storage, or to the
+    /// [`ArcSlice`] one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    /// use either::Either;
+    ///
+    /// let mut s = SmallArcSlice::<[u8]>::new();
+    /// assert!(matches!(s.as_either_mut(), Either::Left(_)));
+    ///
+    /// let mut s = SmallArcSlice::<[u8]>::from_array([0; 256]);
+    /// assert!(matches!(s.as_either_mut(), Either::Right(_)));
+    /// ```
     #[inline(always)]
     pub fn as_either_mut(&mut self) -> Either<&mut SmallSlice<S, L>, &mut ArcSlice<S, L>> {
         if unsafe { SmallSlice::is_inlined(addr_of!(self.0.small)) } {
@@ -364,6 +522,7 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
+    /// Returns either the inlined [`SmallSlice`] storage, or the [`ArcSlice`] one.
     #[inline(always)]
     pub fn into_either(self) -> Either<SmallSlice<S, L>, ArcSlice<S, L>> {
         let mut this = ManuallyDrop::new(self);
@@ -374,6 +533,16 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
+    /// Returns the number of items in the slice.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::from(&[0, 1, 2]);
+    /// assert_eq!(s.len(), 3);
+    /// ```
     pub fn len(&self) -> usize {
         match self.as_either() {
             Either::Left(bytes) => bytes.len(),
@@ -381,10 +550,26 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
+    /// Returns `true` if the slice contains no items.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::from(&[0, 1, 2]);
+    /// assert!(!s.is_empty());
+    ///
+    /// let s = SmallArcSlice::<[u8]>::from(&[]);
+    /// assert!(s.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns a raw pointer to the slice's first item.
+    ///
+    /// See [`slice::as_ptr`].
     pub fn as_ptr(&self) -> *const u8 {
         match self.as_either() {
             Either::Left(bytes) => bytes.as_ptr(),
@@ -392,6 +577,50 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
         }
     }
 
+    /// Tries cloning the `SmallArcSlice`, returning an error if an allocation fails.
+    ///
+    /// The operation may allocate. See [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout)
+    /// documentation for cases where it does not.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let s = SmallArcSlice::<[u8]>::try_from_slice(b"hello world")?;
+    /// let s2 = s.try_clone()?;
+    /// assert_eq!(s2, b"hello world");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn try_clone(&self) -> Result<Self, AllocError> {
+        Ok(match self.as_either() {
+            Either::Left(bytes) => Self(Inner { small: *bytes }),
+            Either::Right(bytes) => Self(Inner {
+                arc: ManuallyDrop::new(bytes.try_clone()?),
+            }),
+        })
+    }
+
+    /// Tries extracting a subslice of an `SmallArcSlice` with a given range, returning an error
+    /// if an allocation fails.
+    ///
+    /// The operation may allocate. See [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout)
+    /// documentation for cases where it does not.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// # fn main() -> Result<(), arc_slice::error::AllocError> {
+    /// let s = SmallArcSlice::<[u8]>::try_from_slice(b"hello world")?;
+    /// let s2 = s.try_subslice(..5)?;
+    /// assert_eq!(s2, b"hello");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn try_subslice(&self, range: impl RangeBounds<usize>) -> Result<Self, AllocError>
     where
         S: Subsliceable,
@@ -415,12 +644,37 @@ impl<S: Slice<Item = u8> + ?Sized, L: Layout> SmallArcSlice<S, L> {
 }
 
 impl<L: Layout> SmallArcSlice<[u8], L> {
+    /// Creates a new `SmallArcSlice` by moving the given array.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX - size_of::<usize>()` bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::from_array([0, 1, 2]);
+    /// assert_eq!(s, [0, 1, 2]);
+    /// ```
     #[cfg(feature = "oom-handling")]
     pub fn from_array<const N: usize>(array: [u8; N]) -> Self {
         SmallSlice::new(array.as_slice())
             .map_or_else(|| ArcSlice::from_array(array).into(), Into::into)
     }
 
+    /// Tries creating a new `SmallArcSlice` by moving the given array, returning it if an
+    /// allocation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::try_from_array([0, 1, 2]).unwrap();
+    /// assert_eq!(s, [0, 1, 2]);
+    /// ```
     pub fn try_from_array<const N: usize>(array: [u8; N]) -> Result<Self, [u8; N]> {
         SmallSlice::new(array.as_slice()).map_or_else(
             || Ok(ArcSlice::try_from_array(array)?.into()),
@@ -435,6 +689,17 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > SmallArcSlice<S, L>
 {
+    /// Extracts a subslice of an `SmallArcSlice` with a given range.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::inlined::SmallArcSlice;
+    ///
+    /// let s = SmallArcSlice::<[u8]>::from_slice(b"hello world");
+    /// let s2 = s.subslice(..5);
+    /// assert_eq!(s2, b"hello");
+    /// ```
     pub fn subslice(&self, range: impl RangeBounds<usize>) -> Self
     where
         S: Subsliceable,
@@ -447,6 +712,18 @@ impl<
 }
 
 impl<L: StaticLayout> SmallArcSlice<[u8], L> {
+    /// Creates a new `SmallArcSlice` from a static slice.
+    ///
+    /// The operation never allocates.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{inlined::SmallArcSlice, layout::ArcLayout};
+    ///
+    /// static HELLO_WORLD: SmallArcSlice<[u8], ArcLayout<true, true>> =
+    ///     SmallArcSlice::<[u8], ArcLayout<true, true>>::from_static(b"hello world");
+    /// ```
     pub const fn from_static(slice: &'static [u8]) -> SmallArcSlice<[u8], L> {
         Self(Inner {
             arc: ManuallyDrop::new(ArcSlice::<[u8], L>::from_static(slice)),
@@ -455,6 +732,18 @@ impl<L: StaticLayout> SmallArcSlice<[u8], L> {
 }
 
 impl<L: StaticLayout> SmallArcSlice<str, L> {
+    /// Creates a new `SmallArcSlice` from a static slice.
+    ///
+    /// The operation never allocates.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{inlined::SmallArcSlice, layout::ArcLayout};
+    ///
+    /// static HELLO_WORLD: SmallArcSlice<[u8], ArcLayout<true, true>> =
+    ///     SmallArcSlice::<[u8], ArcLayout<true, true>>::from_static(b"hello world");
+    /// ```
     pub const fn from_static(slice: &'static str) -> SmallArcSlice<str, L> {
         Self(Inner {
             arc: ManuallyDrop::new(ArcSlice::<str, L>::from_static(slice)),
@@ -702,3 +991,8 @@ impl<L: Layout> core::str::FromStr for SmallArcSlice<str, L> {
         Ok(Self::from_slice(s))
     }
 }
+
+/// An alias for `SmallArcSlice<[u8], L>`.
+pub type SmallArcBytes<L = DefaultLayout> = SmallArcSlice<[u8], L>;
+/// An alias for `SmallArcSlice<str, L>`.
+pub type SmallArcStr<L = DefaultLayout> = SmallArcSlice<str, L>;

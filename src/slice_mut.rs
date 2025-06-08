@@ -137,10 +137,11 @@ pub unsafe trait ArcSliceMutLayout {
     ) -> Option<Data>;
 }
 
-/// A thread-safe mutable and growable slice.
+/// A thread-safe, mutable and growable container.
 ///
-/// It has a smaller choice of [layout] than [`ArcSlice`], but also supports arbitrary buffer
-/// like `Vec`, or shared memory. Arbitrary metadata can even be attached to the buffers.
+/// `ArcSliceMut` has a smaller choice of [layout] than [`ArcSlice`], but can also wrap arbitrary
+/// buffers such as`Vec`, memory-mapped files, etc. Arbitrary metadata can also be attached to the
+/// buffer for contextual or domain-specific needs.
 ///
 /// With `UNIQUE=true`, `ArcSliceMut` is roughly equivalent to a `Vec`. Additional capacity
 /// can be reserved and the slice can be extended. With `UNIQUE=false`, the slice may be shared,
@@ -148,7 +149,7 @@ pub unsafe trait ArcSliceMutLayout {
 /// buffer. In that case, capacity reservation might fail, but the slice will never be implicitly
 /// reallocated and copied. In any case, `ArcSliceMut` is cheaply convertible to [`ArcSlice`].
 ///
-/// It is mainly intended to manipulate byte slices `[u8]`/`str`, to facilitate zero-copy
+/// It is mainly intended to manipulate `[u8]`/`str` byte slices, to facilitate zero-copy
 /// operations in network programming, hence the aliases [`ArcBytesMut`]/[`ArcStrMut`]. But it can
 /// actually handle any type of slices, from strings with specific invariants to primitive slices
 /// with droppable items.
@@ -219,7 +220,7 @@ pub struct ArcSliceMut<
 }
 
 impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQUE> {
-    /// Returns the number of elements in the slice.
+    /// Returns the number of items in the slice.
     ///
     /// # Examples
     ///
@@ -233,7 +234,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         self.length
     }
 
-    /// Returns `true` if the slice has a length of 0.
+    /// Returns `true` if the slice contains no items.
     ///
     /// # Examples
     ///
@@ -250,27 +251,27 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         self.len() == 0
     }
 
-    /// Returns a raw pointer to the slice.
+    /// Returns a raw pointer to the slice's first item.
     ///
-    /// See [`slice::as_ptr`]
+    /// See [`slice::as_ptr`].
     pub const fn as_ptr(&self) -> *const S::Item {
         self.start.as_ptr()
     }
 
-    /// Returns a mutable raw pointer to the slice.
+    /// Returns a mutable raw pointer to the slice's first item.
     ///
-    /// See [`slice::as_mut_ptr`]
+    /// See [`slice::as_mut_ptr`].
     pub fn as_mut_ptr(&mut self) -> *mut S::Item {
         self.start.as_ptr()
     }
 
-    /// Returns the slice.
+    /// Returns a reference to the underlying slice.
     ///
     /// Equivalent to `&self[..]`.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSliceMut;
     ///
     /// let s = ArcSliceMut::<[u8]>::from(b"hello world");
@@ -280,13 +281,13 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         unsafe { S::from_raw_parts(self.start, self.len()) }
     }
 
-    /// Returns the mutable slice.
+    /// Returns a mutable reference to the underlying slice.
     ///
     /// Equivalent to `&mut self[..]`.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSliceMut;
     ///
     /// let mut s = ArcSliceMut::<[u8]>::from(b"hello world");
@@ -560,7 +561,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSliceMut;
     ///
     /// let mut s = ArcSliceMut::<[u8]>::from(b"hello world");
@@ -581,7 +582,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
     ///
     /// If `len` is greater than the slice length, this has no effect.
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSliceMut;
     ///
     /// let mut s = ArcSliceMut::<[u8]>::from(b"hello world");
@@ -703,7 +704,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
 
     /// Tries freezing the slice, returning an immutable [`ArcSlice`].
     ///
-    /// If the mutable slice was split into several parts, only the given one is frozen.
+    /// If the mutable slice was split into several parts, only the current one is frozen.
     ///
     /// The conversion may allocate depending on the given [layouts](crate::layout), but allocation
     /// errors are caught and the original slice is returned in this case.
@@ -716,7 +717,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
     /// let mut s = ArcSliceMut::<[u8]>::with_capacity(16);
     /// s.extend_from_slice(b"hello world");
     ///
-    /// let frozen: ArcSlice<[u8]> = s.freeze();
+    /// let frozen: ArcSlice<[u8]> = s.try_freeze().unwrap();
     /// ```
     pub fn try_freeze<L2: Layout>(self) -> Result<ArcSlice<S, L2>, Self> {
         self.freeze_impl::<L2, AllocError>()
@@ -847,7 +848,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
 impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQUE> {
     /// Freeze the slice, returning an immutable [`ArcSlice`].
     ///
-    /// If the mutable slice was split into several parts, only the given one is frozen.
+    /// If the mutable slice was split into several parts, only the current one is frozen.
     ///
     /// # Examples
     ///
@@ -887,10 +888,39 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
 impl<S: Slice + ?Sized, const ANY_BUFFER: bool, const STATIC: bool, const UNIQUE: bool>
     ArcSliceMut<S, ArcLayout<ANY_BUFFER, STATIC>, UNIQUE>
 {
+    /// Freeze the slice, returning an immutable [`ArcSlice`].
+    ///
+    /// If the mutable slice was split into several parts, only the current one is frozen.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_slice::{layout::DefaultLayoutMut, ArcSlice, ArcSliceMut};
+    ///
+    /// let mut s = ArcSliceMut::<[u8]>::with_capacity(16);
+    /// s.extend_from_slice(b"hello world");
+    ///
+    /// let frozen: ArcSlice<[u8]> = s.freeze();
+    /// ```
     pub fn freeze<L2: FromLayout<ArcLayout<ANY_BUFFER, STATIC>>>(self) -> ArcSlice<S, L2> {
         self.freeze_impl::<L2, Infallible>().unwrap_checked()
     }
 
+    /// Replace the layout of the `ArcSliceMut`.
+    ///
+    /// The [layouts](crate::layout) must be compatible, see [`FromLayout`].
+    ///
+    /// # Examples
+    /// ```rust
+    /// use arc_slice::{
+    ///     layout::{ArcLayout, BoxedSliceLayout, VecLayout},
+    ///     ArcSliceMut,
+    /// };
+    ///
+    /// let a = ArcSliceMut::<[u8]>::from(b"hello world");
+    ///
+    /// let b = a.with_layout::<VecLayout>();
+    /// ```
     pub fn with_layout<L2: LayoutMut + FromLayout<ArcLayout<ANY_BUFFER, STATIC>>>(
         self,
     ) -> ArcSliceMut<S, L2, UNIQUE> {
@@ -978,8 +1008,8 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
         Self::from_slice_impl::<Infallible>(slice).unwrap_infallible()
     }
 
-    /// Tries creating a new `ArcSliceMut` by copying the given slice,
-    /// returning an error if the allocation fails.
+    /// Tries creating a new `ArcSliceMut` by copying the given slice, returning an error if the
+    /// allocation fails.
     ///
     /// # Examples
     ///
@@ -1330,8 +1360,8 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L, false> {
     /// Afterwards `self` contains elements `[0, at)`, and the returned `ArcSliceMut`
     /// contains elements `[at, len)`. This operation does not touch the underlying buffer.
     ///
-    /// The operation may not allocate, see
-    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    /// The operation may allocate. See [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout)
+    /// documentation for cases where it does not.
     ///
     /// # Panics
     ///
@@ -1374,8 +1404,8 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L, false> {
     /// Afterwards `self` contains elements `[at, len)`, and the returned `ArcSliceMut`
     /// contains elements `[0, at)`. This operation does not touch the underlying buffer.
     ///
-    /// The operation may not allocate, see
-    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    /// The operation may allocate. See [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout)
+    /// documentation for cases where it does not.
     ///
     /// # Panics
     ///

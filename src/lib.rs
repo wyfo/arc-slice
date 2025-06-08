@@ -1,6 +1,8 @@
 //! A utility library for working with shared slices of memory.
 //!
-//! The crate provides efficient shared buffer implementations [`ArcSlice`]/[`ArcSliceMut`].
+//! This crate provides efficient shared buffer implementations [`ArcSlice`] and [`ArcSliceMut`].
+//!
+//! # Examples
 //!
 //! ```rust
 //! use arc_slice::{ArcSlice, ArcSliceMut};
@@ -18,7 +20,7 @@
 //! assert_eq!(b, b"Hello ");
 //! ```
 //!
-//! Depending on its [layout], [`ArcSlice`] can also support arbitrary buffer, e.g. shared memory,
+//! Depending on its [layout], [`ArcSlice`] can also support arbitrary buffers, e.g. shared memory,
 //! and provides optional metadata that can be attached to the buffer.
 //!
 //! ```rust
@@ -49,41 +51,41 @@
 //!
 //! ## Features
 //!
-//! The crate defines the following features:
-//! - `abort-on-refcount-overflow` (default): abort on refcount overflow; when not enabled,
-//!   the refcount is saturated on overflow, leaking the allocated memory, as it is done in
-//!   Linux reference counting implementation.
-//! - `bstr`: implement slice traits for [`bstr`](::bstr) crate, allowing to use `ArcSlice<BStr>`.
-//! - `bytemuck`: use [`bytemuck::Zeroable`] as bound for arbitrary slice initialization with [`ArcSliceMut::zeroed`].
-//! - `bytes`: implement [`Buf`](::bytes::Buf)/[`BufMut`](::bytes::BufMut) for [`ArcSlice`]/[`ArcSliceMut`].
-//! - `inlined`: enable [Small String Optimization] for [`ArcSlice`] with
-//!   [`inlined::SmallArcSlice`];
-//! - `oom-handling` (default): enable global [Out Of Memory handling] and provide infallible
-//!   methods involving allocations.
+//! The crate provides the following optional features:
+//! - `abort-on-refcount-overflow` (default): abort on refcount overflow; when disabled,
+//!   the refcount saturates on overflow, leaking allocated memory (as in Linux kernel refcounting).
+//! - `bstr`: implement slice traits for [`bstr`](::bstr) crate, allowing usage of `ArcSlice<BStr>`.
+//! - `bytemuck`: use [`bytemuck::Zeroable`] as a bound for zero-initialization with
+//!   [`ArcSliceMut::zeroed`].
+//! - `bytes`: implement [`Buf`](::bytes::Buf) and [`BufMut`](::bytes::BufMut) traits for
+//!   [`ArcSlice`] and [`ArcSliceMut`].
+//! - `inlined`: enable [Small String Optimization] for [`ArcSlice`] via [`inlined::SmallArcSlice`].
+//! - `oom-handling` (default): enable global [out-of-memory handling] with infallible allocation
+//!   methods.
 //! - `portable-atomic`: use [`portable_atomic`] instead of [`core::sync::atomic`].
 //! - `portable-atomic-util`: implement traits for [`portable_atomic_util::Arc`] instead of
 //!   [`alloc::sync::Arc`].
 //! - `raw-buffer`: enable [`RawBuffer`](buffer::RawBuffer) and [`RawLayout`](layout::RawLayout).
-//! - `serde`: implement [`Serialize`](::serde::Serialize)/[`Deserialize`](::serde::Deserialize)
-//!   for [`ArcSlice`]/[`ArcSliceMut`].
-//! - `std`: implement various `std` traits, link to the `std` crate.
+//! - `serde`: implement [`Serialize`](::serde::Serialize) and [`Deserialize`](::serde::Deserialize)
+//!   for [`ArcSlice`] and [`ArcSliceMut`].
+//! - `std`: enable various `std` trait implementations and link to the standard library crate.
 //!
-//! Moreover, it is possible to override default [layout] using the following features:
-//! - `default-layout-any-buffer`: override the default value of [`ArcLayout`] `ANY_BUFFER`
-//!   to `true`.
-//! - `default-layout-static`: override the default value of [`ArcLayout`] `STATIC` to `true`.
-//! - `default-layout-boxed-slice`: override the default layout to
+//! Additionally, the default [layout] can be overridden with these features:
+//! - `default-layout-any-buffer`: set [`ArcLayout`] `ANY_BUFFER` to `true`.
+//! - `default-layout-static`: set [`ArcLayout`] `STATIC` to `true`.
+//! - `default-layout-boxed-slice`: override default layout to
 //!   [`BoxedSliceLayout`](layout::BoxedSliceLayout).
-//! - `default-layout-vec`: override the default layout to [`VecLayout`](layout::VecLayout).
-//! - `default-layout-raw`: override the default layout to [`RawLayout`](layout::RawLayout).
-//! - `default-layout-any-buffer`: override the default value of [`ArcLayout`] `ANY_BUFFER` to
-//!   `true` for [`ArcSliceMut`].
-//! - `default-layout-vec`: override the default layout to [`VecLayout`](layout::VecLayout)
-//!   for [`ArcSliceMut`].
+//! - `default-layout-vec`: override default layout to [`VecLayout`](layout::VecLayout).
+//! - `default-layout-raw`: override default layout to [`RawLayout`](layout::RawLayout).
+//! - `default-layout-mut-any-buffer`: set [`ArcLayout`] `ANY_BUFFER` to `true` for [`ArcSliceMut`].
+//! - `default-layout-mut-vec`: override default layout to [`VecLayout`](layout::VecLayout) for
+//!   [`ArcSliceMut`].
 //!
 //! [Small String Optimization]: https://cppdepend.com/blog/understanding-small-string-optimization-sso-in-stdstring/
-//! [Out Of Memory handling]: alloc::alloc::handle_alloc_error
+//! [out-of-memory handling]: alloc::alloc::handle_alloc_error
 //! [`ArcLayout`]: layout::ArcLayout
+#![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![no_std]
 extern crate alloc;

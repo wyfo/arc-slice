@@ -127,13 +127,17 @@ pub unsafe trait ArcSliceLayout: 'static {
     ) -> Option<L::Data>;
 }
 
-/// A thread-safe, cheaply cloneable and sliceable slice.
+/// A thread-safe, cheaply cloneable and sliceable container.
 ///
-/// `ArcSlice<S>` is roughly equivalent to `(*const S, Arc<S>)`, hence the properties mentioned
-/// above. With the suited [layout], it also supports arbitrary buffers like `Vec`, or shared
-/// memory. Arbitrary metadata can even be attached to the buffers.
+/// `ArcSlice<S>` is roughly equivalent to a (*const S, Arc<S>) pair: a pointer into a shared
+/// buffer and its associated reference-counted owner. This allows it to behave like a slice while
+/// ensuring memory safety and shared ownership.
+/// <br>
+/// With the appropriate [layout], `ArcSlice` can wrap arbitrary buffers such as Vec, memory-mapped
+/// files, etc. Arbitrary metadata can also be attached to the buffer for contextual or
+/// domain-specific needs.
 ///
-/// It is mainly intended to manipulate byte slices `[u8]`/`str`, to facilitate zero-copy
+/// It is mainly intended to manipulate `[u8]`/`str` byte slices, to facilitate zero-copy
 /// operations in network programming, hence the aliases [`ArcBytes`]/[`ArcStr`]. But it can
 /// actually handle any type of slices, from strings with specific invariants to primitive slices
 /// with droppable items.
@@ -273,8 +277,8 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Self::from_slice_impl::<Infallible>(slice).unwrap_infallible()
     }
 
-    /// Tries creating a new `ArcSlice` by copying the given slice,
-    /// returning an error if the allocation fails.
+    /// Tries creating a new `ArcSlice` by copying the given slice, returning an error if the
+    /// allocation fails.
     ///
     /// # Examples
     ///
@@ -341,7 +345,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Some(Self::init(start, length, data))
     }
 
-    /// Returns the number of elements in the slice.
+    /// Returns the number of items in the slice.
     ///
     /// # Examples
     ///
@@ -355,7 +359,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         self.length
     }
 
-    /// Returns `true` if the slice has a length of 0.
+    /// Returns `true` if the slice contains no items.
     ///
     /// # Examples
     ///
@@ -372,20 +376,20 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         self.len() == 0
     }
 
-    /// Returns a raw pointer to the slice.
+    /// Returns a raw pointer to the slice's first item.
     ///
-    /// See [`slice::as_ptr`]
+    /// See [`slice::as_ptr`].
     pub const fn as_ptr(&self) -> *const S::Item {
         self.start.as_ptr()
     }
 
-    /// Returns the slice.
+    /// Returns a reference to the underlying slice.
     ///
     /// Equivalent to `&self[..]`.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -395,15 +399,13 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         unsafe { S::from_raw_parts(self.start, self.length) }
     }
 
-    /// Borrows a subslice of an `ArcSlice` with a given range.
+    /// Returns a borrowed view of an `ArcSlice` subslice with a given range.
     ///
-    /// The returned [`ArcSliceBorrow`] is roughly equivalent to `(&S, &ArcSlice<S, L>)`, but
-    /// using [`ArcSliceBorrow::clone_arc`] doesn't need to perform the redundant bound check
-    /// when doing the equivalent of [`ArcSlice::subslice_from_ref`].
+    /// See [`ArcSliceBorrow`] documentation.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -418,15 +420,13 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         unsafe { self.borrow_impl(range_offset_len(self.as_slice(), range)) }
     }
 
-    /// Borrows a subslice of an `ArcSlice` from a slice reference.
+    /// Returns a borrowed view of an `ArcSlice` subslice from a slice reference.
     ///
-    /// The returned [`ArcSliceBorrow`] is roughly equivalent to `(&S, &ArcSlice<S, L>)`, but
-    /// using [`ArcSliceBorrow::clone_arc`] doesn't need to perform the redundant bound check
-    /// when doing the equivalent of [`ArcSlice::subslice_from_ref`].
+    /// See [`ArcSliceBorrow`] documentation.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -461,12 +461,12 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     /// Tries cloning the `ArcSlice`, returning an error if an allocation fails.
     ///
-    /// The operation may not allocate, see
-    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    /// The operation may allocate. See [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout)
+    /// documentation for cases where it does not.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// # fn main() -> Result<(), arc_slice::error::AllocError> {
@@ -497,14 +497,15 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         Ok(clone)
     }
 
-    /// Tries extracting a subslice of an `ArcSlice` with a given range, returning an error if an allocation fails.
+    /// Tries extracting a subslice of an `ArcSlice` with a given range, returning an error if an
+    /// allocation fails.
     ///
-    /// The operation may not allocate, see
-    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    /// The operation may allocate. See [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout)
+    /// documentation for cases where it does not.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// # fn main() -> Result<(), arc_slice::error::AllocError> {
@@ -524,12 +525,12 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// Tries extracting a subslice of an `ArcSlice` from a slice reference, returning an error
     /// if an allocation fails.
     ///
-    /// The operation may not allocate, see
-    /// [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout) documentation.
+    /// The operation may allocate. See [`CloneNoAllocLayout`](crate::layout::CloneNoAllocLayout)
+    /// documentation for case where it does not.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// # fn main() -> Result<(), arc_slice::error::AllocError> {
@@ -557,7 +558,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let mut s = ArcSlice::<[u8]>::from(b"hello world");
@@ -596,7 +597,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// The operation may not allocate, see
     /// [`TruncateNoAllocLayout`](crate::layout::TruncateNoAllocLayout) documentation.
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// # fn main() -> Result<(), arc_slice::error::AllocError> {
@@ -937,8 +938,8 @@ impl<T: Send + Sync + 'static, L: Layout> ArcSlice<[T], L> {
         Self::from_array_impl::<Infallible, N>(array).unwrap_infallible()
     }
 
-    /// Tries creating a new `ArcSlice` by moving the given array,
-    /// returning it if an allocation fails.
+    /// Tries creating a new `ArcSlice` by moving the given array, returning it if an allocation
+    /// fails.
     ///
     /// # Examples
     ///
@@ -963,7 +964,7 @@ impl<
     ///
     /// If `len` is greater than the slice length, this has no effect.
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let mut s = ArcSlice::<[u8]>::from(b"hello world");
@@ -988,7 +989,7 @@ impl<
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -1007,7 +1008,7 @@ impl<
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -1875,15 +1876,17 @@ const _: () = {
     }
 };
 
-/// A subslice borrow of an [`ArcSlice`].
+/// A borrowed view of an [`ArcSlice`].
 ///
-/// It is roughly equivalent to `(&S, &ArcSlice<S, L>)`, but using [`ArcSliceBorrow::clone_arc`]
-/// doesn't need to perform the redundant bound check when doing the equivalent of
-/// [`ArcSlice::subslice_from_ref`].
+/// `ArcSliceBorrow` is roughly equivalent to `(&S, &ArcSlice<S, L>)`. A new `ArcSlice` instance
+/// can be obtained with [`clone_arc`].
+/// <br>
+/// One advantage of using `ArcSliceBorrow` is that [`clone_arc`] doesn't need to perform bound
+/// checks that was done at `ArcSliceBorrow` creation; using `(&S, &ArcSlice<S, L>)` however
+/// would require to check bounds a second time when using [`ArcSlice::subslice_from_ref`].
 ///
-/// When using [`ArcLayout`](crate::layout::ArcLayout), `ArcSliceBorrow` is even more efficient
-/// because it can directly embed the internal Arc instead of an `ArcSlice` reference, saving
-/// one indirection.
+/// When using [`ArcLayout`], `ArcSliceBorrow` is even more efficient, because it can directly
+/// embed the internal Arc instead of an `ArcSlice` reference, saving one indirection.
 ///
 /// # Examples
 ///
@@ -1895,6 +1898,9 @@ const _: () = {
 /// assert_eq!(&borrow[..], b"hello");
 /// let s2: ArcSlice<[u8]> = borrow.clone_arc();
 /// ```
+///
+/// [`clone_arc`]: Self::clone_arc
+/// [`ArcLayout`]: crate::layout::ArcLayout
 pub struct ArcSliceBorrow<'a, S: Slice + ?Sized, L: Layout = DefaultLayout> {
     start: NonNull<S::Item>,
     length: usize,
@@ -1944,8 +1950,8 @@ impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
         })
     }
 
-    /// Tries cloning the borrow into a subslice of the underlying [`ArcSlice`], returning an
-    /// error if an allocation fails.
+    /// Tries cloning the `ArcSliceBorrow` into a subslice of the borrowed [`ArcSlice`], returning
+    /// an error if an allocation fails.
     ///
     /// The returned [`ArcSlice`] has the same slice as the original borrow.
     ///
@@ -1967,13 +1973,13 @@ impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
         self.clone_arc_impl::<AllocError>()
     }
 
-    /// Extracts the borrowed slice.
+    /// Returns the borrowed slice.
     ///
     /// Roughly equivalent to `&self[..]`, but using the borrow lifetime instead of self's one.
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -1989,7 +1995,7 @@ impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -2011,7 +2017,7 @@ impl<'a, S: Slice + ?Sized, L: Layout> ArcSliceBorrow<'a, S, L> {
     ///
     /// # Examples
     ///
-    ///```rust
+    /// ```rust
     /// use arc_slice::ArcSlice;
     ///
     /// let s = ArcSlice::<[u8]>::from(b"hello world");
@@ -2048,9 +2054,10 @@ impl<
         #[cfg(not(feature = "oom-handling"))] L: CloneNoAllocLayout,
     > ArcSliceBorrow<'_, S, L>
 {
-    /// Clone the borrow into a subslice of the underlying [`ArcSlice`].
+    /// Clone the `ArcSliceBorrow` into a subslice of the borrowed [`ArcSlice`].
     ///
     /// The returned [`ArcSlice`] has the same slice as the original borrow.
+    ///
     ///
     /// # Examples
     ///

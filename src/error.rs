@@ -1,4 +1,4 @@
-//! The errors.
+//! Error types used in fallible allocation and buffer resizing.
 
 use core::fmt;
 
@@ -19,7 +19,9 @@ impl fmt::Display for AllocError {
 pub enum TryReserveError {
     /// The buffer reference is not unique.
     ///
-    /// It may occur when the same buffer is reference by multiple `ArcSliceMut`.
+    /// Occurs when the same buffer is referenced by multiple [`ArcSliceMut`]s.
+    ///
+    /// [`ArcSliceMut`]: crate::ArcSliceMut
     NotUnique,
     /// The buffer doesn't support reservation.
     Unsupported,

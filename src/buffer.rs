@@ -1,4 +1,4 @@
-//! The slice and buffer traits used by [`ArcSlice`] and [`ArcSliceMut`].
+//! Generic slice and buffer abstractions used by [`ArcSlice`] and [`ArcSliceMut`].
 //!
 //! [`ArcSlice`]: crate::ArcSlice
 //! [`ArcSliceMut`]: crate::ArcSliceMut
@@ -30,10 +30,10 @@ use crate::{
 ///
 /// # Safety
 ///
-/// - [`into_vec`](Self::into_vec) must be pure, i.e. `mem::forget(S::into_vec(ptr::read(vec_ptr)))`
+/// - [`into_vec`](Self::into_vec) must be *pure*, i.e. `mem::forget(S::into_vec(ptr::read(vec_ptr)))`
 ///   should not invalidate memory behind `vec_ptr`.
-/// - If [`try_from_slice_mut`](Self::try_from_slice_mut) returns `Ok`, then
-///   [`try_from_slice`](Self::try_from_slice) must also return `Ok` for the same slice.
+/// - If [`try_from_slice_mut`](Self::try_from_slice_mut) returns `Ok` for a slice, then
+///   [`try_from_slice`](Self::try_from_slice) must also return `Ok` for that slice.
 pub unsafe trait Slice: Send + Sync + 'static {
     /// The slice item, e.g. `T` for `[T]` or `u8` for `str`.
     type Item: Send + Sync + 'static;
@@ -136,8 +136,8 @@ pub unsafe trait Emptyable: Slice {}
 ///
 /// # Safety
 ///
-/// An item slice allocated with [`alloc_zeroed`](alloc::alloc::alloc_zeroed) must be convertible
-/// to the given slice.
+/// An item slice allocated with [`alloc_zeroed`](alloc::alloc::alloc_zeroed) must be valid and
+/// safely interpretable as the slice type without undefined behavior.
 pub unsafe trait Zeroable: Slice {}
 
 /// A slice that can be split into smaller subslices.
@@ -429,6 +429,8 @@ impl Deserializable for str {
 }
 
 /// A buffer that contains a slice.
+///
+/// Buffer needs to implement `Send`, as it may be dropped in another thread.
 pub trait Buffer<S: ?Sized>: Sized + Send + 'static {
     /// Returns the buffer slice.
     fn as_slice(&self) -> &S;
@@ -454,7 +456,7 @@ impl<S: Slice + ?Sized> Buffer<S> for Box<S> {
     }
 }
 
-impl<T: Send + Sync + 'static> Buffer<[T]> for Vec<T> {
+impl<T: Send + 'static> Buffer<[T]> for Vec<T> {
     fn as_slice(&self) -> &[T] {
         self
     }
@@ -500,12 +502,15 @@ impl<S: Slice + ?Sized, B: Buffer<S>> BufferExt<S> for B {}
 /// [`set_len`]: Self::set_len
 /// [`try_reserve`]: Self::try_reserve
 /// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
-pub unsafe trait BufferMut<S: ?Sized>: Buffer<S> + Sync {
+pub unsafe trait BufferMut<S: ?Sized>: Buffer<S> {
     /// Returns the mutable buffer slice.
     fn as_mut_slice(&mut self) -> &mut S;
     /// Returns the buffer capacity.
     fn capacity(&self) -> usize;
     /// Set the length of the buffer slice.
+    ///
+    /// Returns `false` if this operation is not supported, for example for fixed size buffers
+    /// like [`AsMutBuffer`].
     ///
     /// # Safety
     ///
@@ -531,10 +536,10 @@ unsafe impl<T: Send + Sync + 'static> BufferMut<[T]> for Vec<T> {
     }
 
     fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        let overflow = |len| (len as isize).checked_add(additional as isize).is_none();
+        let requested = |len| (len as isize).checked_add(additional.try_into().ok()?);
         match self.try_reserve(additional) {
             Ok(()) => Ok(()),
-            Err(_) if overflow(self.len()) => Err(TryReserveError::CapacityOverflow),
+            Err(_) if requested(self.len()).is_none() => Err(TryReserveError::CapacityOverflow),
             Err(_) => Err(TryReserveError::AllocError),
         }
     }
@@ -676,6 +681,18 @@ pub trait BorrowMetadata: Sync {
     fn borrow_metadata(&self) -> &Self::Metadata;
 }
 
+mod private {
+    use core::{any::Any, ptr::NonNull};
+
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe trait DynBuffer {
+        type Buffer: Any;
+        type Metadata: Any;
+        fn get_metadata(&self) -> &Self::Metadata;
+        unsafe fn take_buffer(this: *mut Self, buffer: NonNull<()>);
+    }
+}
+
 unsafe impl<B: BorrowMetadata + Any> DynBuffer for B {
     type Buffer = B;
     type Metadata = B::Metadata;
@@ -803,6 +820,8 @@ impl<B: BorrowMetadata> BorrowMetadata for AsRefBuffer<B> {
 }
 
 /// A wrapper around buffer implementing [`AsMut`].
+///
+/// [`BufferMut`] implementation is not resizable, as it is based on a fixed-length slice.
 #[derive(Debug, Clone)]
 pub struct AsMutBuffer<B>(B);
 
@@ -812,7 +831,7 @@ impl<B> AsMutBuffer<B> {
     /// # SAFETY
     ///
     /// If buffer implements `AsMut<S>` and `AsRef<S>`, then both operations must return the same
-    /// slice. If `B` implements [`BorrowedMetadata`], then [`borrow_metadata`] must not invalidate
+    /// slice. If `B` implements [`BorrowMetadata`], then [`borrow_metadata`] must not invalidate
     /// the buffer slice.
     ///
     /// [`borrow_metadata`]: BorrowMetadata::borrow_metadata
@@ -900,7 +919,8 @@ const _: () = {
         }
 
         fn is_unique(&self) -> bool {
-            // See impl Buffer<T> for Arc<[T]>
+            // Arc doesn't expose an API to check uniqueness with shared reference
+            // See `Arc::is_unique`, it cannot be done by simply checking strong/weak counts
             false
         }
     }
@@ -916,15 +936,3 @@ const _: () = {
         }
     }
 };
-
-mod private {
-    use core::{any::Any, ptr::NonNull};
-
-    #[allow(clippy::missing_safety_doc)]
-    pub unsafe trait DynBuffer {
-        type Buffer: Any;
-        type Metadata: Any;
-        fn get_metadata(&self) -> &Self::Metadata;
-        unsafe fn take_buffer(this: *mut Self, buffer: NonNull<()>);
-    }
-}

@@ -67,8 +67,6 @@ harness = false
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"
-#missing_docs = "deny"
-missing_debug_implementations = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(unreachable_checked)'] }
 
 [lints.clippy]
