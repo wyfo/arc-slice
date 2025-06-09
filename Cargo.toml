@@ -47,7 +47,7 @@ bytes = { version = "1", default-features = false, optional = true }
 bstr = { version = "1", default-features = false, features = ["alloc"], optional = true }
 cfg-if = "1"
 either = { version = "1", default-features = false, optional = true }
-portable-atomic = { version = "1", default-features = false, optional = true }
+portable-atomic = { version = "1", default-features = false, features = ["require-cas"], optional = true }
 portable-atomic-util = { version = "0.2", default-features = false, features = ["alloc"], optional = true }
 serde = { version = "1", default-features = false, features = ["alloc"], optional = true }
 
