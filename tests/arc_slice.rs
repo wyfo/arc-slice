@@ -8,7 +8,7 @@ use std::{
 
 use arc_slice::{layout::BoxedSliceLayout, ArcBytes};
 
-// empty vec subslices doesn't trigger promotion to an arc, so it can still be downcasted
+// empty vec subslices doesn't trigger promotion to an arc, so it can still be downcast
 #[test]
 fn empty_vec_subslices() {
     let mut bytes = ArcBytes::<BoxedSliceLayout>::from(vec![0, 1, 2, 3]);
@@ -61,7 +61,7 @@ impl Drop for Metadata {
     }
 }
 
-// metadata can be downcasted, and is dropped when the slice is dropped
+// metadata can be downcast, and is dropped when the slice is dropped
 #[test]
 fn metadata() {
     let metadata = Metadata::default();
@@ -98,7 +98,7 @@ fn metadata() {
 //     ));
 // }
 
-// // buffer cannot be downcasted if there are clones or if it is a subslice
+// // buffer cannot be downcast if there are clones or if it is a subslice
 // #[test]
 // fn downcast_buffer() {
 //     let array = [0u8, 1, 2, 3];
@@ -119,7 +119,7 @@ fn metadata() {
 //     assert!(bytes.try_into_buffer::<[u8; 4]>().is_err());
 // }
 //
-// // vec cannot be downcasted if there are clones, but it works with subslices
+// // vec cannot be downcast if there are clones, but it works with subslices
 // #[test]
 // fn downcast_vec() {
 //     let bytes = <ArcBytes>::new(vec![42]);
@@ -139,7 +139,7 @@ fn metadata() {
 //     assert_eq!(bytes.try_into_buffer::<Vec<u8>>().unwrap(), [2, 3]);
 // }
 //
-// // static slices can always be downcasted
+// // static slices can always be downcast
 // #[test]
 // fn downcast_static() {
 //     let bytes = <ArcBytes>::new_static(&[0, 1, 2, 3]);
@@ -151,7 +151,7 @@ fn metadata() {
 //     );
 // }
 //
-// // `with_metadata` with unit metadata is like `new`, so a static subslice can be downcasted
+// // `with_metadata` with unit metadata is like `new`, so a static subslice can be downcast
 // // it would not be the case if unit metadata was not handled specially
 // #[test]
 // fn downcast_static_with_unit_metadata() {
@@ -160,7 +160,7 @@ fn metadata() {
 //     assert_eq!(subslice.try_into_buffer::<&'static [u8]>().unwrap(), [0, 1]);
 // }
 //
-// // ensure the metadata is dropped when the slice is downcasted
+// // ensure the metadata is dropped when the slice is downcast
 // #[test]
 // fn downcast_buffer_with_metadata() {
 //     let metadata = Metadata::default();

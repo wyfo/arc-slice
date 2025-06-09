@@ -771,7 +771,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
         L::is_unique::<S>(&self.data)
     }
 
-    /// Accesses the metadata of the underlying buffer if it can be successfully downcasted.
+    /// Accesses the metadata of the underlying buffer if it can be successfully downcast.
     ///
     /// # Examples
     ///

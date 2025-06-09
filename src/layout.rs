@@ -3,7 +3,11 @@
 //! A layout defines how the data is stored, impacting memory size and the behavior
 //! of some operations like `clone`.
 //!
-//! The default layout for [`ArcSlice`] and [`ArcSliceMut`] can be overridden using
+//! Almost all layouts are compatible with each other: [`ArcSlice::with_layout`] and
+//! [`ArcSliceMut::with_layout`] allows to update the layout used, often at zero cost. See
+//! [`FromLayout`].
+//!
+//! [`ArcSlice`] and [`ArcSliceMut`] have a default layout, which can be overridden using
 //! [crate features](crate#features).
 //!
 //! ## Which layout to choose
@@ -27,12 +31,12 @@
 //!
 //! ## Layouts summary
 //!
-//! | Layout             | `ArcSlice` size          | static/empty slices support | arbitrary buffers support | may allocate on clone | optimized for      |
-//! |--------------------|--------------------------|-----------------------------|---------------------------|-----------------------|--------------------|
-//! | `ArcLayout`        | `3 * size_of::<usize>()` | yes (optional)              | yes (optional)            | no                    | regular `ArcSlice` |
-//! | `BoxedSliceLayout` | `3 * size_of::<usize>()` | yes                         | yes                       | yes                   | `Box<[T]>`         |
-//! | `VecLayout`        | `4 * size_of::<usize>()` | yes                         | yes                       | yes                   | `Vec<T>`           |
-//! | `RawLayout`        | `4 * size_of::<usize>()` | yes                         | yes                       | no                    | `RawBuffer`        |
+//! | Layout             | `ArcSlice` size          | static/empty slices support | arbitrary buffers support | cloning may allocate | optimized for      |
+//! |--------------------|--------------------------|-----------------------------|---------------------------|----------------------|--------------------|
+//! | `ArcLayout`        | `3 * size_of::<usize>()` | yes (optional)              | yes (optional)            | no                   | regular `ArcSlice` |
+//! | `BoxedSliceLayout` | `3 * size_of::<usize>()` | yes                         | yes                       | yes                  | `Box<[T]>`         |
+//! | `VecLayout`        | `4 * size_of::<usize>()` | yes                         | yes                       | yes                  | `Vec<T>`           |
+//! | `RawLayout`        | `4 * size_of::<usize>()` | yes                         | yes                       | no                   | `RawBuffer`        |
 //!
 //! [crate feature]: crate#features
 //! [`Arc`]: alloc::sync::Arc
@@ -97,8 +101,8 @@ impl<const ANY_BUFFER: bool, const STATIC: bool> TruncateNoAllocLayout
 }
 impl<const ANY_BUFFER: bool, const STATIC: bool> LayoutMut for ArcLayout<ANY_BUFFER, STATIC> {}
 
-/// Enables storing a boxed slice into an [`ArcSlice`] without requiring a second allocation
-/// (for the inner Arc), as long as there is a single instance.
+/// Enables storing a boxed slice into an [`ArcSlice`] without requiring the allocation of an inner
+/// Arc, as long as there is a single instance.
 ///
 /// As soon as the [`ArcSlice`] is cloned (or subsliced), then an inner Arc is allocated. As a
 /// consequence, when [`oom-handling` feature](crate#features) is not enabled,
@@ -120,8 +124,8 @@ impl Layout for BoxedSliceLayout {}
 impl AnyBufferLayout for BoxedSliceLayout {}
 impl StaticLayout for BoxedSliceLayout {}
 
-/// Enables storing a vector into an [`ArcSlice`] without requiring a second allocation
-/// (for the inner Arc), as long as there is a single instance.
+/// Enables storing a vector into an [`ArcSlice`] without requiring the allocation of an inner Arc,
+/// as long as there is a single instance.
 ///
 /// As soon as the [`ArcSlice`] is cloned (or subsliced), then an inner Arc is allocated. As a
 /// consequence, when [`oom-handling` feature](crate#features) is not enabled,
@@ -140,7 +144,7 @@ impl StaticLayout for VecLayout {}
 impl TruncateNoAllocLayout for VecLayout {}
 impl LayoutMut for VecLayout {}
 
-/// Enables storing a [`RawBuffer`], without requiring a second allocation (for the inner Arc).
+/// Enables storing a [`RawBuffer`], without requiring the allocation of an inner Arc.
 /// ```rust
 /// # use core::mem::size_of;
 /// # use arc_slice::{layout::RawLayout, ArcBytes};
@@ -164,12 +168,18 @@ impl TruncateNoAllocLayout for RawLayout {}
 
 /// A layout that can be converted from another one.
 ///
-/// Layouts that don't implement [`AnyBufferLayout`] cannot straightforwardly be converted from
-/// ones that do. However, the actual underlying buffer may be compatible, for example, an
-/// `ArcSlice<[u8], VecLayout>` backed by an Arc buffer can in fact be converted  to an
-/// `ArcSlice<[u8], ArcLayout<false>>`. Fallible conversions like
-/// [`ArcSlice::try_with_layout`]/[`ArcSliceMut::try_freeze`]/etc. can be used to handle this edge
-/// case.
+/// As long as a layout implement [`AnyBufferLayout`], every other layout can be converted to it.
+/// This conversion is often very cheap, when the default `ArcSlice` buffer is used, but it may
+/// require to allocate an Arc when to arbitrary buffers specially supported by the input layout.
+/// For example, converting `ArcSlice<S, BoxedSliceLayout>` to `ArcSlice<S, ArcLayout<true>>` might
+/// allocate an `Arc` if a boxed slice was store inlined.
+///
+/// `ArcLayout<false>` doesn't implement [`AnyBufferLayout`], so it cannot straightforwardly be
+/// converted from other layouts, as it may not support the underlying buffer. However, the actual
+/// underlying buffer may be compatible, for example, an `ArcSlice<S, VecLayout>` backed by an
+/// Arc buffer can in fact be converted  to an`ArcSlice<S, ArcLayout<false>>`. Fallible conversions
+/// like [`ArcSlice::try_with_layout`]/[`ArcSliceMut::try_freeze`]/etc. can be used to handle this
+/// edge case.
 pub trait FromLayout<L: Layout>: Layout {}
 
 impl<const STATIC: bool, L: Layout> FromLayout<ArcLayout<false, STATIC>> for L {}

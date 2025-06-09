@@ -603,7 +603,7 @@ impl<S: Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> ArcSliceMut<S, L, UNIQ
         self.length = len;
     }
 
-    /// Accesses the metadata of the underlying buffer if it can be successfully downcasted.
+    /// Accesses the metadata of the underlying buffer if it can be successfully downcast.
     ///
     /// # Examples
     ///
