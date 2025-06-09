@@ -129,7 +129,7 @@ pub unsafe trait ArcSliceLayout: 'static {
 
 /// A thread-safe, cheaply cloneable and sliceable container.
 ///
-/// `ArcSlice<S>` is roughly equivalent to a (*const S, Arc<S>) pair: a pointer into a shared
+/// `ArcSlice<S>` is roughly equivalent to a `(*const S, Arc<S>)` pair: a pointer into a shared
 /// buffer and its associated reference-counted owner. This allows it to behave like a slice while
 /// ensuring memory safety and shared ownership.
 /// <br>
@@ -186,8 +186,8 @@ pub unsafe trait ArcSliceLayout: 'static {
 /// ```
 ///
 /// [layout]: crate::layout
-/// [ArcBytes]: crate::ArcBytes
-/// [ArcStr]: crate::ArcStr
+/// [`ArcBytes`]: crate::ArcBytes
+/// [`ArcStr`]: crate::ArcStr
 #[cfg_attr(feature = "inlined", repr(C))]
 pub struct ArcSlice<S: Slice + ?Sized, L: Layout = DefaultLayout> {
     #[cfg(not(feature = "inlined"))]

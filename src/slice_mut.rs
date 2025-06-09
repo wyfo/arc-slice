@@ -205,8 +205,8 @@ pub unsafe trait ArcSliceMutLayout {
 /// ```
 ///
 /// [layout]: crate::layout
-/// [ArcBytesMut]: crate::ArcBytesMut
-/// [ArcStrMut]: crate::ArcStrMut
+/// [`ArcBytesMut`]: crate::ArcBytesMut
+/// [`ArcStrMut`]: crate::ArcStrMut
 pub struct ArcSliceMut<
     S: Slice + ?Sized,
     L: LayoutMut = DefaultLayoutMut,
@@ -1227,7 +1227,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     ///
     /// # Panics
     ///
-    /// See [reserve](Self::reserve#panics).
+    /// See [reserve](Self::reserve).
     ///
     /// # Examples
     ///
@@ -1257,7 +1257,7 @@ impl<S: Slice + ?Sized, L: LayoutMut> ArcSliceMut<S, L> {
     ///
     /// # Panics
     ///
-    /// See [reserve](Self::reserve#panics).
+    /// See [reserve](Self::reserve).
     ///
     /// ```rust
     /// use arc_slice::ArcSliceMut;
