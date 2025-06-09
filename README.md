@@ -9,12 +9,6 @@ https://docs.rs/arc-slice)
 
 A utility library for working with shared slices of memory.
 
-## ⚠️ I HAVE A BIG REWORK IN PROGRESS ⚠️
-
-More optimizations (less instructions, better predictability), more features (custom `Arc` support without additional allocation, unique mutable slice, etc.), more generic interface (slice trait, more layouts, default layout selection with features, etc.), more no_std-friendly (fallible allocations), more documentation (-_-'), etc.
-
-Stay tuned! 
-
 ## Example
 
 ```rust
