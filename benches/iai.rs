@@ -1,24 +1,23 @@
-#![allow(clippy::incompatible_msrv)]
 use std::hint::black_box;
 
-use arc_slice::ArcBytes;
+use arc_slice::{layout::ArcLayout, ArcBytes};
 use bytes::Bytes;
 use iai_callgrind::{library_benchmark, library_benchmark_group, main};
 
 #[library_benchmark]
 fn arcslice_declare() {
-    black_box(<ArcBytes>::new(vec![0u8; 8]));
+    black_box(<ArcBytes<ArcLayout<true>>>::from(vec![0u8; 8]));
 }
 
 #[library_benchmark]
 fn arcslice_clone() {
-    let bytes = <ArcBytes>::new(vec![0u8; 8]);
+    let bytes = <ArcBytes<ArcLayout<true>>>::from(vec![0u8; 8]);
     black_box(black_box(&bytes).clone());
 }
 
 #[library_benchmark]
 fn arcslice_100_clone() {
-    let bytes = <ArcBytes>::new(vec![0u8; 8]);
+    let bytes = <ArcBytes<ArcLayout<true>>>::from(vec![0u8; 8]);
     for _ in 0..100 {
         black_box(black_box(&bytes).clone());
     }
@@ -26,7 +25,7 @@ fn arcslice_100_clone() {
 
 #[library_benchmark]
 fn arcslice_subslice_and_split() {
-    let mut bytes = <ArcBytes>::new(b"Hello world");
+    let mut bytes = <ArcBytes<ArcLayout<false, true>>>::from_static(b"Hello world");
     let a = bytes.subslice(0..5);
 
     assert_eq!(a, b"Hello");
@@ -39,7 +38,7 @@ fn arcslice_subslice_and_split() {
 
 #[library_benchmark]
 fn arcslice_subslice_and_split_black_box() {
-    let mut bytes = <ArcBytes>::new(b"Hello world");
+    let mut bytes = <ArcBytes<ArcLayout<false, true>>>::from_slice(b"Hello world");
     let a = black_box(&bytes).subslice(0..5);
 
     assert_eq!(black_box(&a), b"Hello");

@@ -21,14 +21,15 @@ fn test_bounds() {
     is_send::<BytesMut>();
 }
 
+// NO COMPAT Bytes layout can be 3 words
 #[test]
 fn test_layout() {
     use std::mem;
 
-    assert_eq!(
-        mem::size_of::<Bytes>(),
-        mem::size_of::<usize>() * 3,
-        "Bytes size should be 4 words",
+    assert!(
+        mem::size_of::<Bytes>() == mem::size_of::<usize>() * 3
+            || mem::size_of::<Bytes>() == mem::size_of::<usize>() * 4,
+        "Bytes size should be 3-4 words",
     );
     assert_eq!(
         mem::size_of::<BytesMut>(),
@@ -1160,9 +1161,29 @@ fn test_bytes_vec_conversion() {
     assert_eq!(v.as_slice(), b"bcdefg");
 }
 
+// NO COMPAT BytesMut::with_capacity doesn't allocate a Vec
+#[should_panic]
 #[test]
 fn test_bytes_mut_conversion() {
     let mut b1 = BytesMut::with_capacity(10);
+    b1.extend(b"abcdefg");
+    let b2 = Bytes::from(b1);
+    let v = Vec::from(b2);
+    assert_eq!(v.len(), 7);
+    assert_eq!(v.capacity(), 10);
+
+    let mut b = Bytes::from(v);
+    b.advance(1);
+    let v = Vec::from(b);
+    assert_eq!(v.len(), 6);
+    assert_eq!(v.capacity(), 10);
+    assert_eq!(v.as_slice(), b"bcdefg");
+}
+
+// NO COMPAT fixed version of the previous test
+#[test]
+fn test_bytes_mut_conversion_compat() {
+    let mut b1 = BytesMut::from(arc_slice::ArcBytesMut::from(Vec::with_capacity(10)));
     b1.extend(b"abcdefg");
     let b2 = Bytes::from(b1);
     let v = Vec::from(b2);

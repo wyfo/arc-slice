@@ -1,254 +1,202 @@
 use alloc::{string::String, vec::Vec};
-use core::{cmp, fmt, marker::PhantomData, mem};
+use core::{cmp, fmt, marker::PhantomData, ops::Deref};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    layout::Layout,
-    macros::{is, is_not},
-    utils::transmute_slice,
-    ArcSlice, ArcSliceMut, ArcStr,
+    buffer::{Deserializable, Slice},
+    layout::{ArcLayout, Layout, LayoutMut},
+    utils::try_as_bytes,
+    ArcSlice, ArcSliceMut,
 };
 
-const MAX_DESERIALIZE_SIZE_HINT: usize = 1 << 12;
+const MAX_DESERIALIZE_SIZE: usize = 1 << 12;
 
-fn serialize_slice<T, S>(slice: &[T], serializer: S) -> Result<S::Ok, S::Error>
-where
-    T: Serialize + Send + Sync + 'static,
-    S: Serializer,
-{
-    match transmute_slice(slice) {
+fn serialize_slice<S: Serialize + Slice + ?Sized, Ser: Serializer>(
+    slice: &S,
+    serializer: Ser,
+) -> Result<Ser::Ok, Ser::Error> {
+    match try_as_bytes(slice) {
         Some(b) => serializer.serialize_bytes(b),
-        None => serializer.collect_seq(slice),
+        None => slice.serialize(serializer),
     }
 }
 
-impl<T: Serialize + Send + Sync + 'static, L: Layout> Serialize for ArcSlice<T, L> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+impl<S: Serialize + Slice + ?Sized, L: Layout> Serialize for ArcSlice<S, L> {
+    fn serialize<Ser>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error>
     where
-        S: Serializer,
+        Ser: Serializer,
     {
-        serialize_slice(self, serializer)
+        serialize_slice(self.deref(), serializer)
     }
 }
 
-impl<T: Serialize + Send + Sync + 'static> Serialize for ArcSliceMut<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serialize_slice(self, serializer)
-    }
-}
-
-impl<L: Layout> Serialize for ArcStr<L> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self)
-    }
-}
-
-struct ArcSliceVisitor<T, S>(PhantomData<(T, S)>);
-
-impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, S: Default + From<Vec<T>>>
-    de::Visitor<'de> for ArcSliceVisitor<T, S>
+impl<S: Serialize + Slice + ?Sized, L: LayoutMut, const UNIQUE: bool> Serialize
+    for ArcSliceMut<S, L, UNIQUE>
 {
-    type Value = S;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str(if is!(T, u8) { "bytes" } else { "sequence" })
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+    fn serialize<Ser>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error>
     where
-        E: de::Error,
+        Ser: Serializer,
     {
-        match transmute_slice(v) {
-            Some([]) => Ok(S::default()),
-            Some(s) => Ok(s.to_vec().into()),
-            None => Err(de::Error::invalid_type(de::Unexpected::Bytes(v), &self)),
-        }
-    }
-
-    fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        if is_not!(T, u8) {
-            return Err(de::Error::invalid_type(de::Unexpected::Bytes(&v), &self));
-        }
-        Ok(unsafe { mem::transmute::<Vec<u8>, Vec<T>>(v) }.into())
-    }
-
-    fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
-    where
-        V: de::SeqAccess<'de>,
-    {
-        if is!(T, u8) {
-            return Err(de::Error::invalid_type(de::Unexpected::Seq, &self));
-        }
-        let capa = cmp::min(seq.size_hint().unwrap_or(0), MAX_DESERIALIZE_SIZE_HINT);
-        let mut values: Vec<T> = Vec::with_capacity(capa);
-        while let Some(value) = seq.next_element()? {
-            values.push(value);
-        }
-        Ok(values.into())
+        serialize_slice(self.deref(), serializer)
     }
 }
 
-fn deserialize_arc_slice<'de, T, S, D>(deserializer: D) -> Result<S, D::Error>
+trait IntoArcSlice<S: Slice + ?Sized> {
+    fn from_slice(slice: &S) -> Self;
+    fn from_vec(vec: S::Vec) -> Self;
+    fn from_arc_slice_mut(slice: ArcSliceMut<S, ArcLayout<false, false>>) -> Self;
+}
+
+impl<S: Slice + ?Sized, L: Layout> IntoArcSlice<S> for ArcSlice<S, L> {
+    fn from_slice(slice: &S) -> Self {
+        ArcSlice::new_bytes(slice)
+    }
+    fn from_vec(vec: S::Vec) -> Self {
+        ArcSlice::new_byte_vec(vec)
+    }
+    fn from_arc_slice_mut(slice: ArcSliceMut<S, ArcLayout<false, false>>) -> Self {
+        slice.freeze()
+    }
+}
+
+impl<S: Slice + ?Sized, L: LayoutMut> IntoArcSlice<S> for ArcSliceMut<S, L> {
+    fn from_slice(slice: &S) -> Self {
+        ArcSliceMut::new_bytes(slice)
+    }
+    fn from_vec(vec: S::Vec) -> Self {
+        ArcSliceMut::new_byte_vec(vec)
+    }
+    fn from_arc_slice_mut(slice: ArcSliceMut<S, ArcLayout<false, false>>) -> Self {
+        slice.with_layout()
+    }
+}
+
+struct ArcSliceVisitor<S: Slice + ?Sized, T>(PhantomData<(S::Vec, T)>);
+
+impl<'de, S: Slice + Deserializable + ?Sized, T: IntoArcSlice<S>> de::Visitor<'de>
+    for ArcSliceVisitor<S, T>
 where
-    T: Deserialize<'de> + Clone + Send + Sync + 'static,
-    S: Default + From<Vec<T>>,
-    D: Deserializer<'de>,
+    S::Item: for<'a> Deserialize<'a>,
+    S::TryFromSliceError: fmt::Display,
 {
-    let visitor = ArcSliceVisitor(PhantomData);
-    if is!(T, u8) {
-        deserializer.deserialize_byte_buf(visitor)
-    } else {
-        deserializer.deserialize_seq(visitor)
-    }
-}
-
-impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static, L: Layout> Deserialize<'de>
-    for ArcSlice<T, L>
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserialize_arc_slice(deserializer)
-    }
-}
-
-impl<'de, T: Deserialize<'de> + Clone + Send + Sync + 'static> Deserialize<'de> for ArcSliceMut<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserialize_arc_slice(deserializer)
-    }
-}
-
-struct ArcStrVisitor<L: Layout>(PhantomData<L>);
-
-impl<L: Layout> de::Visitor<'_> for ArcStrVisitor<L> {
-    type Value = ArcStr<L>;
+    type Value = T;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "string")
+        S::expecting(formatter)
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(v.parse().unwrap())
+        S::deserialize_from_str(v).map(T::from_slice)
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(v.into())
+        S::deserialize_from_string(v).map(T::from_vec)
+    }
+
+    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        S::deserialize_from_bytes(v).map(T::from_slice)
+    }
+
+    fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        S::deserialize_from_byte_buf(v).map(T::from_vec)
+    }
+
+    fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
+    where
+        V: de::SeqAccess<'de>,
+    {
+        if !S::try_deserialize_from_seq() {
+            return Err(de::Error::invalid_type(de::Unexpected::Seq, &self));
+        }
+        let capacity = cmp::min(
+            seq.size_hint().unwrap_or(0),
+            MAX_DESERIALIZE_SIZE / core::mem::size_of::<S::Item>(),
+        );
+        let mut slice = ArcSliceMut::<[S::Item], ArcLayout<false, false>>::with_capacity(capacity);
+        while let Some(item) = seq.next_element()? {
+            slice.push(item);
+        }
+        Ok(T::from_arc_slice_mut(
+            ArcSliceMut::try_from_arc_slice_mut(slice)
+                .map_err(|(err, _)| de::Error::custom(err))?,
+        ))
     }
 }
 
-impl<'de, L: Layout> Deserialize<'de> for ArcStr<L> {
+impl<'de, S: Slice + Deserializable + ?Sized, L: Layout> Deserialize<'de> for ArcSlice<S, L>
+where
+    S::Item: for<'a> Deserialize<'a>,
+    S::TryFromSliceError: fmt::Display,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_str(ArcStrVisitor(PhantomData))
+        S::deserialize(deserializer, ArcSliceVisitor::<S, Self>(PhantomData))
+    }
+}
+
+impl<'de, S: Slice + Deserializable + ?Sized, L: LayoutMut> Deserialize<'de> for ArcSliceMut<S, L>
+where
+    S::Item: for<'a> Deserialize<'a>,
+    S::TryFromSliceError: fmt::Display,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        S::deserialize(deserializer, ArcSliceVisitor::<S, Self>(PhantomData))
     }
 }
 
 #[cfg(feature = "inlined")]
 const _: () = {
-    use crate::inlined::{SmallArcBytes, SmallArcStr};
-    impl<L: Layout> Serialize for SmallArcBytes<L> {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    use crate::inlined::SmallArcSlice;
+
+    impl<S: Serialize + Slice<Item = u8> + ?Sized, L: Layout> Serialize for SmallArcSlice<S, L> {
+        fn serialize<Ser>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error>
         where
-            S: Serializer,
+            Ser: Serializer,
         {
-            serializer.serialize_bytes(self)
+            serialize_slice(self.deref(), serializer)
         }
     }
 
-    impl<L: Layout> Serialize for SmallArcStr<L> {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serializer.serialize_str(self)
+    impl<S: Slice<Item = u8> + ?Sized, L: Layout> IntoArcSlice<S> for SmallArcSlice<S, L> {
+        fn from_slice(slice: &S) -> Self {
+            SmallArcSlice::from_slice(slice)
+        }
+        fn from_vec(vec: S::Vec) -> Self {
+            ArcSlice::<S, L>::from_vec(vec).into()
+        }
+        fn from_arc_slice_mut(slice: ArcSliceMut<S, ArcLayout<false, false>>) -> Self {
+            slice.freeze().into()
         }
     }
 
-    struct SmallArcBytesVisitor<L>(PhantomData<L>);
-
-    impl<L: Layout> de::Visitor<'_> for SmallArcBytesVisitor<L> {
-        type Value = SmallArcBytes<L>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            write!(formatter, "bytes")
-        }
-
-        fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(SmallArcBytes::from_slice(v))
-        }
-
-        fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(v.into())
-        }
-    }
-
-    impl<'de, L: Layout> Deserialize<'de> for SmallArcBytes<L> {
+    impl<'de, S: Slice<Item = u8> + Deserializable + ?Sized, L: LayoutMut> Deserialize<'de>
+        for SmallArcSlice<S, L>
+    where
+        S::TryFromSliceError: fmt::Display,
+    {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: Deserializer<'de>,
         {
-            deserializer.deserialize_byte_buf(SmallArcBytesVisitor(PhantomData))
-        }
-    }
-
-    struct SmallArcStrVisitor<L>(PhantomData<L>);
-
-    impl<L: Layout> de::Visitor<'_> for SmallArcStrVisitor<L> {
-        type Value = SmallArcStr<L>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            write!(formatter, "string")
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(v.parse().unwrap())
-        }
-
-        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(v.into())
-        }
-    }
-
-    impl<'de, L: Layout> Deserialize<'de> for SmallArcStr<L> {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            deserializer.deserialize_byte_buf(SmallArcStrVisitor(PhantomData))
+            S::deserialize(deserializer, ArcSliceVisitor::<S, Self>(PhantomData))
         }
     }
 };

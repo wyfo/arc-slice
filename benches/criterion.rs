@@ -1,4 +1,3 @@
-#![allow(clippy::incompatible_msrv)]
 use std::hint::black_box;
 
 use arc_slice::ArcBytes;
@@ -19,7 +18,7 @@ fn clone_vec(c: &mut Criterion) {
     let mut group = c.benchmark_group("clone_vec");
     group.bench_function("arcslice", |b| {
         b.iter_batched(
-            || <ArcBytes>::new(vec![0u8; 8]),
+            || <ArcBytes>::from(vec![0u8; 8]),
             |bytes| bytes.clone(),
             BatchSize::SmallInput,
         );
@@ -36,7 +35,7 @@ fn clone_vec(c: &mut Criterion) {
 fn clone_static(c: &mut Criterion) {
     let mut group = c.benchmark_group("clone_static");
     group.bench_function("arcslice", |b| {
-        let bytes = <ArcBytes>::new_static(&[]);
+        let bytes = <ArcBytes>::from_static(&[]);
         b.iter(|| bytes.clone());
     });
     group.bench_function("bytes", |b| {
@@ -48,11 +47,13 @@ fn clone_static(c: &mut Criterion) {
 fn clone_shared(c: &mut Criterion) {
     let mut group = c.benchmark_group("clone_shared");
     group.bench_function("arcslice", |b| {
-        let bytes = <ArcBytes>::new(vec![0u8; 8]).clone();
+        let bytes = <ArcBytes>::from(vec![0u8; 8]);
+        let _ = bytes.clone();
         b.iter(|| bytes.clone());
     });
     group.bench_function("bytes", |b| {
-        let bytes = Bytes::from(vec![0u8; 8]).clone();
+        let bytes = Bytes::from(vec![0u8; 8]);
+        let _ = bytes.clone();
         b.iter(|| bytes.clone());
     });
 }
@@ -61,7 +62,7 @@ fn subslice_and_split(c: &mut Criterion) {
     let mut group = c.benchmark_group("subslice_and_split");
     group.bench_function("arcslice", |b| {
         b.iter(|| {
-            let mut bytes = <ArcBytes>::new(b"Hello world");
+            let mut bytes = <ArcBytes>::from_slice(b"Hello world");
             let a = bytes.subslice(0..5);
 
             assert_eq!(a, b"Hello");
@@ -74,7 +75,7 @@ fn subslice_and_split(c: &mut Criterion) {
     });
     group.bench_function("bytes", |b| {
         b.iter(|| {
-            let mut bytes = Bytes::from("Hello world");
+            let mut bytes = Bytes::copy_from_slice(b"Hello world");
             let a = bytes.slice(0..5);
 
             assert_eq!(a, "Hello");
@@ -91,7 +92,7 @@ fn subslice_and_split_black_box(c: &mut Criterion) {
     let mut group = c.benchmark_group("subslice_and_split_black_box");
     group.bench_function("arcslice", |b| {
         b.iter(|| {
-            let mut bytes = <ArcBytes>::new(b"Hello world");
+            let mut bytes = <ArcBytes>::from_slice(b"Hello world");
             let a = black_box(&bytes).subslice(0..5);
 
             assert_eq!(black_box(&a), b"Hello");
@@ -104,7 +105,7 @@ fn subslice_and_split_black_box(c: &mut Criterion) {
     });
     group.bench_function("bytes", |b| {
         b.iter(|| {
-            let mut bytes = Bytes::from("Hello world");
+            let mut bytes = Bytes::copy_from_slice(b"Hello world");
             let a = black_box(&bytes).slice(0..5);
 
             assert_eq!(black_box(&a), "Hello");

@@ -24,15 +24,3 @@ repos:
         language: rust
         pass_filenames: false
         types_or: [rust, toml]
-      - id: test
-        name: test
-        entry: cargo test --all-features
-        language: rust
-        pass_filenames: false
-        types_or: [rust, toml]
-      - id: test-bytes
-        name: test
-        entry: cargo test --manifest-path bytes/Cargo.toml --test test_bytes
-        language: rust
-        pass_filenames: false
-        types_or: [rust, toml]

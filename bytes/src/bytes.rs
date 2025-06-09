@@ -5,21 +5,19 @@ use core::{
     ops::{Deref, RangeBounds},
 };
 
-use arc_slice::{buffer::Buffer, ArcBytes};
+use arc_slice::{buffer::AsRefBuffer, ArcBytes};
 
 use crate::{Buf, BytesMut};
 
-#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
 #[repr(transparent)]
 pub struct Bytes(ArcBytes);
 
-struct Owner<T>(T);
-impl<T: AsRef<[u8]> + Send + 'static> Buffer<u8> for Owner<T> {
-    fn as_slice(&self) -> &[u8] {
-        self.0.as_ref()
+impl Default for Bytes {
+    fn default() -> Bytes {
+        Self(ArcBytes::from_slice(&[]))
     }
 }
-struct OwnerMetadata;
 
 impl Bytes {
     pub fn new() -> Self {
@@ -27,14 +25,14 @@ impl Bytes {
     }
 
     pub const fn from_static(bytes: &'static [u8]) -> Self {
-        Self(ArcBytes::new_static(bytes))
+        Self(ArcBytes::from_static(bytes))
     }
 
     pub fn from_owner<T>(owner: T) -> Self
     where
         T: AsRef<[u8]> + Send + 'static,
     {
-        Self(ArcBytes::with_metadata(Owner(owner), OwnerMetadata))
+        Self(ArcBytes::from_buffer(AsRefBuffer(owner)))
     }
 
     pub const fn len(&self) -> usize {
@@ -46,7 +44,7 @@ impl Bytes {
     }
 
     pub fn is_unique(&self) -> bool {
-        self.0.is_unique() && self.0.get_metadata::<OwnerMetadata>().is_none()
+        self.0.is_unique()
     }
 
     pub fn copy_from_slice(data: &[u8]) -> Self {
@@ -133,13 +131,13 @@ impl Deref for Bytes {
 impl AsRef<[u8]> for Bytes {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
+        self
     }
 }
 
 impl Borrow<[u8]> for Bytes {
     fn borrow(&self) -> &[u8] {
-        self.0.as_slice()
+        self
     }
 }
 
@@ -157,7 +155,7 @@ impl<'a> IntoIterator for &'a Bytes {
     type IntoIter = core::slice::Iter<'a, u8>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.as_slice().iter()
+        self.iter()
     }
 }
 
@@ -169,13 +167,13 @@ impl FromIterator<u8> for Bytes {
 
 impl PartialEq<[u8]> for Bytes {
     fn eq(&self, other: &[u8]) -> bool {
-        self.0.as_slice() == other
+        self[..] == *other
     }
 }
 
 impl PartialOrd<[u8]> for Bytes {
     fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(other)
+        self[..].partial_cmp(other)
     }
 }
 
@@ -193,13 +191,13 @@ impl PartialOrd<Bytes> for [u8] {
 
 impl PartialEq<str> for Bytes {
     fn eq(&self, other: &str) -> bool {
-        self.0.as_slice() == other.as_bytes()
+        self[..] == *other.as_bytes()
     }
 }
 
 impl PartialOrd<str> for Bytes {
     fn partial_cmp(&self, other: &str) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(other.as_bytes())
+        self[..].partial_cmp(other.as_bytes())
     }
 }
 
@@ -223,7 +221,7 @@ impl PartialEq<Vec<u8>> for Bytes {
 
 impl PartialOrd<Vec<u8>> for Bytes {
     fn partial_cmp(&self, other: &Vec<u8>) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(&other[..])
+        self[..].partial_cmp(&other[..])
     }
 }
 
@@ -247,7 +245,7 @@ impl PartialEq<String> for Bytes {
 
 impl PartialOrd<String> for Bytes {
     fn partial_cmp(&self, other: &String) -> Option<cmp::Ordering> {
-        self.0.as_slice().partial_cmp(other.as_bytes())
+        self[..].partial_cmp(other.as_bytes())
     }
 }
 
@@ -337,7 +335,10 @@ impl From<String> for Bytes {
 
 impl From<Bytes> for Vec<u8> {
     fn from(bytes: Bytes) -> Vec<u8> {
-        bytes.0.into_vec()
+        bytes
+            .0
+            .try_into_buffer::<Vec<u8>>()
+            .unwrap_or_else(|bytes| bytes[..].to_vec())
     }
 }
 
