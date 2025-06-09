@@ -117,7 +117,7 @@ On the other hand, `bytes::Bytes` always use virtual method call for clone/drop,
 <br>
 There is an obvious theoretical performance advantage for `ArcSlice` with its default `ArcLayout`, especially coming from better inlining (no virtual call) and fewer allocations. Benchmark results appear to confirm this advantage.
 
-Here are the results of the own `bytes` benchmark, compared to the exact same benchmark using an `arc-slice`-based implementation [100% compatible with `bytes`](#compatibility-with-bytes):
+Here are the results of the own `bytes` benchmark, compared to the exact same benchmark using an `arc-slice`-based implementation [100% compatible with `bytes`](#compatibility-with-bytes). The benchmark has been run on Ubuntu 20.04 with an AMD Ryzen 7 5800X CPU and 32GB of RAM.
 | benchmark              | `bytes`           | `arc-slice`       |
 |------------------------|-------------------|-------------------|
 | `clone_arc_vec`        | 3,629.94 ns/iter  | 3,634.34 ns/iter  |
