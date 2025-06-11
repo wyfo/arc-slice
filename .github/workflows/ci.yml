@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: unreachable_unchecked
-        run: cargo build --manifest-path=bytes/Cargo.toml --tests --release --features=default-layout-${{ matrix.layout }}
+        run: cargo build --manifest-path=bytes/Cargo.toml --tests --release --features=arc-slice/default-layout-${{ matrix.layout }}
         env:
           RUSTFLAGS: --cfg=unreachable_checked
   test:
