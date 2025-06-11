@@ -20,12 +20,19 @@ jobs:
         run: cargo doc --all-features
         env:
           RUSTDOCFLAGS: -Dwarnings
-      - name: unreachable_checked
-        run: cargo build --manifest-path=bytes/Cargo.toml --tests --release
-        env:
-          RUSTFLAGS: --cfg=unreachable_checked
       - name: expect
         run: git grep -lz "#\[allow" | xargs -0 sed -i "s/#\[allow(/#[expect(/g" && cargo clippy --all-features
+  unreachable:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        layout: [boxed-slice, vec, raw, mut-vec]
+    steps:
+      - uses: actions/checkout@v4
+      - name: unreachable_unchecked
+        run: cargo build --manifest-path=bytes/Cargo.toml --tests --release --features=arc-slice/default-layout-${{ matrix.layout }}
+        env:
+          RUSTFLAGS: --cfg=unreachable_checked
   test:
     runs-on: ubuntu-latest
     steps:

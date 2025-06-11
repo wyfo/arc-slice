@@ -193,9 +193,14 @@ impl<S: Slice + ?Sized> CompactVec<S> {
             length: offset + length,
         };
         let (capacity, start) = unsafe {
-            buffer.try_reserve_impl(offset, length, additional, allocate, |vec| {
-                vec.arc.buffer.start
-            })
+            buffer.try_reserve_impl(
+                offset,
+                length,
+                additional,
+                allocate,
+                |vec| vec.arc.buffer.start,
+                || (),
+            )
         };
         (capacity, start.cast())
     }
@@ -292,9 +297,14 @@ pub(crate) mod vtable {
             return (Err(TryReserveError::Unsupported), start);
         }
         let (capacity, start) = unsafe {
-            buffer.try_reserve_impl(offset, length, additional, allocate, |b| {
-                b.as_mut_slice().as_mut_ptr()
-            })
+            buffer.try_reserve_impl(
+                offset,
+                length,
+                additional,
+                allocate,
+                |b| b.as_mut_slice().as_mut_ptr(),
+                || (),
+            )
         };
         (capacity, start.cast())
     }
@@ -686,9 +696,14 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
                     length: offset + length,
                 };
                 let res = unsafe {
-                    buffer.try_reserve_impl(offset, length, additional, allocate, |arc| {
-                        arc.arc.slice_start()
-                    })
+                    buffer.try_reserve_impl(
+                        offset,
+                        length,
+                        additional,
+                        allocate,
+                        |arc| arc.arc.slice_start(),
+                        || (),
+                    )
                 };
                 self.inner = buffer.arc.inner;
                 res

@@ -260,7 +260,9 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
             Data::Capacity(capacity) if is!(B, S::Vec) => {
                 let mut vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
                 let offset = unsafe { vec.offset(start) };
-                unsafe { vec.shift_left(offset, length, S::vec_start) };
+                if !unsafe { vec.shift_left(offset, length, S::vec_start) } {
+                    return None;
+                }
                 Some(transmute_checked(vec))
             }
             Data::Capacity(capacity) if is!(B, Box<S>) && length == capacity.get() => {
