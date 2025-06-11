@@ -53,7 +53,7 @@ impl VecLayout {
         offset: usize,
     ) -> S::Vec {
         unsafe {
-            assume!(capacity > 0);
+            assume!(capacity + offset > 0);
             S::from_vec_unchecked(Vec::from_raw_parts(
                 start.sub(offset).as_ptr(),
                 length + offset,
@@ -157,8 +157,10 @@ unsafe impl ArcSliceMutLayout for VecLayout {
             }
             OffsetOrArc::Offset(offset) if is!(B, S::Vec) => {
                 let mut vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, offset) };
-                unsafe { vec.shift_left(offset, length, S::vec_start) };
-                transmute_checked(vec)
+                if !unsafe { vec.shift_left(offset, length, S::vec_start) } {
+                    return None;
+                }
+                Some(transmute_checked(vec))
             }
             _ => None,
         }
@@ -204,7 +206,11 @@ unsafe impl ArcSliceMutLayout for VecLayout {
                 let mut vec = ManuallyDrop::new(unsafe {
                     Self::rebuild_vec::<S>(start, length, capacity, offset)
                 });
-                unsafe { vec.try_reserve_impl(offset, length, additional, allocate, S::vec_start) }
+                unsafe {
+                    vec.try_reserve_impl(offset, length, additional, allocate, S::vec_start, || {
+                        *data = OffsetOrArc::<S>::Offset(0).into();
+                    })
+                }
             }
         }
     }

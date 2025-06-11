@@ -20,10 +20,7 @@ pub(crate) use crate::buffer::private::DynBuffer;
 #[allow(unused_imports)]
 use crate::msrv::{ConstPtrExt, NonNullExt, OffsetFromUnsignedExt, SlicePtrExt};
 use crate::{
-    error::TryReserveError,
-    macros::assume,
-    slice_mut::TryReserveResult,
-    utils::{assert_checked, NewChecked},
+    error::TryReserveError, macros::assume, slice_mut::TryReserveResult, utils::NewChecked,
 };
 
 /// A slice, e.g. `[T]` or `str`.
@@ -585,6 +582,7 @@ pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
         Ok((new_ptr.cast(), new_capacity))
     }
 
+    #[must_use]
     unsafe fn shift_left(
         &mut self,
         offset: usize,
@@ -592,12 +590,10 @@ pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
         // do not use the pointer derived from slice as it is invalidated with the slice
         start: impl Fn(&mut Self) -> NonNull<S::Item>,
     ) -> bool {
-        assert_checked(!mem::needs_drop::<S::Item>());
         let prev_len = self.len();
         if length == prev_len {
             return true;
-        }
-        if !unsafe { self.set_len(length) } {
+        } else if S::needs_drop() || !unsafe { self.set_len(length) } {
             return false;
         }
         let src = unsafe { start(self).add(offset) }.as_ptr();
@@ -620,17 +616,18 @@ pub(crate) trait BufferMutExt<S: Slice + ?Sized>: BufferMut<S> {
         allocate: bool,
         // do not use the pointer derived from slice as it is invalidated with the slice
         start: impl Fn(&mut Self) -> NonNull<S::Item>,
+        reset_offset: impl FnOnce(),
     ) -> TryReserveResult<S::Item> {
         let capacity = self.capacity();
         if capacity - offset - length >= additional {
             return (Ok(capacity - offset), unsafe { start(self).add(offset) });
         }
-        if !mem::needs_drop::<S::Item>()
-            // conditions from `BytesMut::reserve_inner`
-            && self.capacity() - length >= additional
+        // conditions from `BytesMut::reserve_inner`
+        if self.capacity() - length >= additional
             && offset >= length
             && unsafe { self.shift_left(offset, length, &start) }
         {
+            reset_offset();
             return (Ok(capacity), start(self));
         }
         if allocate && unsafe { self.set_len(offset + length) } {
