@@ -414,7 +414,7 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// assert_eq!(&borrow[..], b"hello");
     /// let s2: ArcSlice<[u8]> = borrow.clone_arc();
     /// ```
-    pub fn borrow(&self, range: impl RangeBounds<usize>) -> ArcSliceBorrow<S, L>
+    pub fn borrow(&self, range: impl RangeBounds<usize>) -> ArcSliceBorrow<'_, S, L>
     where
         S: Subsliceable,
     {
@@ -436,14 +436,14 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
     /// assert_eq!(&borrow[..], b"hello");
     /// let s2: ArcSlice<[u8]> = borrow.clone_arc();
     /// ```
-    pub fn borrow_from_ref(&self, subset: &S) -> ArcSliceBorrow<S, L>
+    pub fn borrow_from_ref(&self, subset: &S) -> ArcSliceBorrow<'_, S, L>
     where
         S: Subsliceable,
     {
         unsafe { self.borrow_impl(subslice_offset_len(self.as_slice(), subset)) }
     }
 
-    unsafe fn borrow_impl(&self, (offset, len): (usize, usize)) -> ArcSliceBorrow<S, L>
+    unsafe fn borrow_impl(&self, (offset, len): (usize, usize)) -> ArcSliceBorrow<'_, S, L>
     where
         S: Subsliceable,
     {
