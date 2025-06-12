@@ -22,6 +22,15 @@ jobs:
           RUSTDOCFLAGS: -Dwarnings
       - name: expect
         run: git grep -lz "#\[allow" | xargs -0 sed -i "s/#\[allow(/#[expect(/g" && cargo clippy --all-features
+  msrv:
+    name: check msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.64"
+      - run: cargo +1.64 check
   unreachable:
     runs-on: ubuntu-latest
     strategy:
