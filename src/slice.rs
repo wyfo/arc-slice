@@ -46,6 +46,7 @@ mod vec;
 #[allow(clippy::missing_safety_doc)]
 pub unsafe trait ArcSliceLayout: 'static {
     type Data;
+    const DATA_COPY: bool;
     const ANY_BUFFER: bool;
     const STATIC_DATA: Option<Self::Data>;
     // MSRV 1.83 const `Option::unwrap`
@@ -456,7 +457,14 @@ impl<S: Slice + ?Sized, L: Layout> ArcSlice<S, L> {
 
     fn clone_impl<E: AllocErrorImpl>(&self) -> Result<Self, E> {
         let data = L::clone::<S, E>(self.start, self.length, &self.data)?;
-        Ok(Self::init(self.start, self.length, data))
+        Ok(if L::DATA_COPY {
+            // ptr::read compiles to 128bit register use on x86_64
+            let mut clone = unsafe { ptr::read(self) };
+            clone.data = ManuallyDrop::new(data);
+            clone
+        } else {
+            Self::init(self.start, self.length, data)
+        })
     }
 
     /// Tries cloning the `ArcSlice`, returning an error if an allocation fails.

@@ -35,7 +35,7 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
     for ArcLayout<ANY_BUFFER, STATIC>
 {
     type Data = Option<NonNull<()>>;
-
+    const DATA_COPY: bool = true;
     const ANY_BUFFER: bool = ANY_BUFFER;
     const STATIC_DATA: Option<Self::Data> = if STATIC { Some(None) } else { None };
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> = if STATIC {
@@ -88,7 +88,10 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         _length: usize,
         data: &Self::Data,
     ) -> Result<Self::Data, E> {
-        Ok(Self::arc::<S>(data).map(|arc| (*arc).clone().into_raw()))
+        if let Some(arc) = Self::arc::<S>(data) {
+            mem::forget((*arc).clone());
+        }
+        Ok(*data)
     }
 
     unsafe fn drop<S: Slice + ?Sized, const UNIQUE_HINT: bool>(

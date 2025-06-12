@@ -151,6 +151,7 @@ impl BoxedSliceOrVecLayout for VecLayout {
 
 unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
     type Data = (DataPtr, MaybeUninit<L::Base>);
+    const DATA_COPY: bool = false;
     const ANY_BUFFER: bool = true;
     #[allow(clippy::declare_interior_mutable_const)]
     const STATIC_DATA: Option<Self::Data> = Some((DataPtr::new_static(), MaybeUninit::uninit()));
