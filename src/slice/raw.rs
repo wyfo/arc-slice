@@ -181,6 +181,7 @@ fn arc_or_vtable<S: Slice + ?Sized>(
 
 unsafe impl ArcSliceLayout for RawLayout {
     type Data = (*const (), Option<&'static VTable>);
+    const DATA_COPY: bool = true;
     const ANY_BUFFER: bool = true;
     const STATIC_DATA: Option<Self::Data> = Some((ptr::null(), Some(static_vtable::VTABLE)));
     const STATIC_DATA_UNCHECKED: MaybeUninit<Self::Data> =
