@@ -120,7 +120,7 @@ pub unsafe trait ArcSliceLayout: 'static {
         start: NonNull<S::Item>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<Data>)>;
+    ) -> Option<(usize, Option<Data<true>>)>;
     fn update_layout<S: Slice + ?Sized, L: ArcSliceLayout, E: AllocErrorImpl>(
         start: NonNull<S::Item>,
         length: usize,

@@ -151,7 +151,7 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceLayout
         start: NonNull<S::Item>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<slice_mut::Data>)> {
+    ) -> Option<(usize, Option<slice_mut::Data<true>>)> {
         match Self::arc::<S>(data) {
             Some(mut arc) => Some((
                 unsafe { arc.capacity(start)? },

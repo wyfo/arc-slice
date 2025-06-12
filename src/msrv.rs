@@ -213,11 +213,12 @@ impl Zeroable for usize {
 pub struct NonZero<T: Zeroable>(T::NonZero);
 
 impl<T: Zeroable> NonZero<T> {
-    pub(crate) fn new(n: T) -> Option<Self> {
-        T::non_zero(n).map(Self)
+    #[allow(clippy::new_ret_no_self)]
+    pub(crate) fn new<N: From<Self>>(n: T) -> Option<N> {
+        T::non_zero(n).map(Self).map(From::from)
     }
 
-    pub(crate) unsafe fn new_unchecked(n: T) -> Self {
+    pub(crate) unsafe fn new_unchecked<N: From<Self>>(n: T) -> N {
         unsafe { Self::new(n).unwrap_unchecked() }
     }
 
@@ -234,7 +235,7 @@ impl From<NonZero<usize>> for NonZeroUsize {
 
 impl From<NonZeroUsize> for NonZero<usize> {
     fn from(value: NonZeroUsize) -> Self {
-        NonZero::new_checked(value.get())
+        Self(value)
     }
 }
 

@@ -3,6 +3,7 @@ use core::{
     convert::Infallible,
     fmt,
     mem::MaybeUninit,
+    num::NonZeroUsize,
     ops::{Bound, RangeBounds},
     ptr::NonNull,
 };
@@ -12,7 +13,6 @@ use crate::msrv::StrictProvenance;
 use crate::{
     buffer::{Slice, SliceExt, Subsliceable},
     macros::{is, is_not},
-    msrv::{NonZero, Zeroable},
 };
 
 #[inline(always)]
@@ -200,10 +200,10 @@ impl<T: ?Sized> NewChecked<*mut T> for NonNull<T> {
     }
 }
 
-impl<T: Zeroable> NewChecked<T> for NonZero<T> {
+impl NewChecked<usize> for NonZeroUsize {
     #[inline(always)]
-    fn new_checked(arg: T) -> Self {
-        NonZero::new(arg).unwrap_checked()
+    fn new_checked(arg: usize) -> Self {
+        NonZeroUsize::new(arg).unwrap_checked()
     }
 }
 
