@@ -305,7 +305,7 @@ unsafe impl ArcSliceLayout for RawLayout {
         start: NonNull<S::Item>,
         _length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<slice_mut::Data>)> {
+    ) -> Option<(usize, Option<slice_mut::Data<true>>)> {
         match arc_or_vtable::<S>(**data) {
             ArcOrVTable::Arc(mut arc) => Some((
                 unsafe { arc.capacity(start)? },
@@ -314,7 +314,7 @@ unsafe impl ArcSliceLayout for RawLayout {
             ArcOrVTable::Vtable { ptr, vtable } => {
                 let capacity = unsafe { (vtable.capacity)(ptr, start.cast()) };
                 (capacity != usize::MAX).then(|| {
-                    let data = unsafe { NonNull::new_unchecked(ptr.cast_mut()) }.into();
+                    let data = slice_mut::Data(unsafe { NonNull::new_unchecked(ptr.cast_mut()) });
                     (capacity, Some(data))
                 })
             }

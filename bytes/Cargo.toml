@@ -9,7 +9,7 @@ std = ["arc-slice/std"]
 portable-atomic = ["arc-slice/portable-atomic"]
 
 [dependencies]
-arc-slice = { version = "0.1.0-alpha.1", path = "..", default-features = false, features = ["abort-on-refcount-overflow", "oom-handling", "default-layout-any-buffer", "default-layout-static", "default-layout-mut-any-buffer"] }
+arc-slice = { version = "0.1.0-alpha.1", path = "..", default-features = false, features = ["abort-on-refcount-overflow", "oom-handling", "default-layout-any-buffer", "default-layout-static", "default-layout-mut-any-buffer", "default-layout-mut-shared"] }
 bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1.0.60", optional = true, default-features = false, features = ["alloc"] }
 

@@ -80,6 +80,9 @@
 //! - `default-layout-mut-any-buffer`: set [`ArcLayout`] `ANY_BUFFER` to `true` for [`ArcSliceMut`].
 //! - `default-layout-mut-vec`: override default layout to [`VecLayout`](layout::VecLayout) for
 //!   [`ArcSliceMut`].
+//! - `default-layout-mut-shared`: optimize [`ArcLayout`](layout::ArcLayout) in [`ArcSliceMut`] to
+//!   be mainly used with `UNIQUE=false`; this is the case for example when emulating
+//!   [`BytesMut`](::bytes::BytesMut`).
 //!
 //! [Small String Optimization]: https://cppdepend.com/blog/understanding-small-string-optimization-sso-in-stdstring/
 //! [out-of-memory handling]: alloc::alloc::handle_alloc_error

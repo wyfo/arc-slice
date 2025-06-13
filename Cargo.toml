@@ -40,6 +40,7 @@ default-layout-raw = ["raw-buffer"]
 default-layout-vec = []
 default-layout-mut-any-buffer = []
 default-layout-mut-vec = []
+default-layout-mut-shared = []
 
 [dependencies]
 bytemuck = { version = "1", default-features = false, optional = true }

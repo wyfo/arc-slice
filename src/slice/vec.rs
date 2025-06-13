@@ -295,7 +295,7 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
         start: NonNull<S::Item>,
         length: usize,
         data: &mut ManuallyDrop<Self::Data>,
-    ) -> Option<(usize, Option<slice_mut::Data>)> {
+    ) -> Option<(usize, Option<slice_mut::Data<true>>)> {
         let (ptr, base) = &mut **data;
         match ptr.get_mut::<S>() {
             Data::Static => (length == 0).then_some((0, None)),
@@ -306,7 +306,8 @@ unsafe impl<L: BoxedSliceOrVecLayout + 'static> ArcSliceLayout for L {
             Data::Capacity(capacity) => {
                 let vec = unsafe { Self::rebuild_vec::<S>(start, length, capacity, *base) };
                 let offset = unsafe { vec.offset(start) };
-                let data = Some(unsafe { L2::data_from_vec::<S, AllocError>(vec, offset).ok()? });
+                let data =
+                    Some(unsafe { L2::data_from_vec::<S, AllocError, true>(vec, offset).ok()? });
                 Some((capacity.get() - offset, data))
             }
         }
