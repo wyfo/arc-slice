@@ -9,19 +9,13 @@ use arc_slice::{buffer::AsRefBuffer, ArcBytes};
 
 use crate::{Buf, BytesMut};
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::TransparentWrapper)]
 #[repr(transparent)]
 pub struct Bytes(ArcBytes);
 
-impl Default for Bytes {
-    fn default() -> Bytes {
-        Self(ArcBytes::from_slice(&[]))
-    }
-}
-
 impl Bytes {
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self(ArcBytes::new())
     }
 
     pub const fn from_static(bytes: &'static [u8]) -> Self {
