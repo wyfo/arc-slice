@@ -68,15 +68,16 @@ pub trait TruncateNoAllocLayout: Layout {}
 ///
 /// It aims to be more performant than other layouts for supported operations,
 /// though other layouts may support a broader range of use cases.
-/// It takes two generic boolean parameters, whose defaults can be overridden via compilation
-/// features:
+/// It takes two generic boolean parameters, whose defaults can be overridden via
+/// [compilation features](crate#features):
 /// - `ANY_BUFFER`, default to false, if it supports arbitrary buffer;
 /// - `STATIC`, default to false, if it supports static slices without allocations; it
 ///   enables [`Default`] implementation for [`ArcSlice`], as well as const constructors.
 ///
 /// Other layouts support arbitrary buffers and static slices out of the box, but this flexibility
-/// comes at a cost. `ArcLayout` focuses instead on providing the most optimized implementation
-/// adapted to each use case.
+/// comes at the cost of additional branching or virtual method call. `ArcLayout` focuses instead
+/// on providing the most optimized implementation adapted to each use case.
+///
 /// ```rust
 /// # use core::mem::size_of;
 /// # use arc_slice::{layout::ArcLayout, ArcBytes, ArcBytesMut};
