@@ -11,7 +11,8 @@ fn arcslice_declare() {
 
 #[library_benchmark]
 fn arcslice_declare_drop_unique() {
-    black_box(<ArcBytes<ArcLayout<true>>>::from(b"hello world")).drop_with_unique_hint();
+    // black_box(<ArcBytes<ArcLayout<true>>>::from(b"hello world")).drop_with_unique_hint();
+    black_box(<ArcBytes<ArcLayout<true>>>::from(b"hello world"));
 }
 
 #[library_benchmark]
