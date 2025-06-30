@@ -634,6 +634,16 @@ impl<S: Slice + ?Sized, const ANY_BUFFER: bool> Arc<S, ANY_BUFFER> {
         if !UNIQUE && !self.is_unique() {
             return (Err(TryReserveError::NotUnique), start);
         }
+        unsafe { self.try_reserve_unique(start, length, additional, allocate) }
+    }
+
+    pub(crate) unsafe fn try_reserve_unique(
+        &mut self,
+        start: NonNull<S::Item>,
+        length: usize,
+        additional: usize,
+        allocate: bool,
+    ) -> TryReserveResult<S::Item> {
         match self.vtable_or_capacity() {
             VTableOrCapacity::VTable(vtable) => {
                 let (capacity, start) = unsafe {

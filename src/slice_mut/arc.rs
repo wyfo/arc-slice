@@ -5,7 +5,7 @@ use crate::msrv::StrictProvenance;
 use crate::{
     arc::Arc,
     buffer::{BufferMut, Slice},
-    error::AllocErrorImpl,
+    error::{AllocErrorImpl, TryReserveError},
     layout::ArcLayout,
     msrv::ptr,
     slice::ArcSliceLayout,
@@ -179,7 +179,10 @@ unsafe impl<const ANY_BUFFER: bool, const STATIC: bool> ArcSliceMutLayout
         allocate: bool,
     ) -> TryReserveResult<S::Item> {
         let mut arc = (*data).get_arc::<S, ANY_BUFFER>();
-        let res = unsafe { arc.try_reserve::<UNIQUE>(start, length, additional, allocate) };
+        if !UNIQUE && !(*data).is_unique() && !arc.is_unique() {
+            return (Err(TryReserveError::NotUnique), start);
+        }
+        let res = unsafe { arc.try_reserve_unique(start, length, additional, allocate) };
         if res.0.is_ok() {
             // Arc::try_reserve may reallocate the arc, but only if it succeeds, and in that case
             // the data is unique
